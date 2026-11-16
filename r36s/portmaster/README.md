@@ -33,8 +33,9 @@ Copy the `card/NFSHP2` folder into `ports/nfshp2/gamedata/`.
 | D-pad Up | change HUD |
 | Start | pause |
 | Select + Start, held a second | quit |
-| Select + R2 | change graphics preset |
+| Select + L1 (or L3 / R3) | toggle FPS & performance overlay |
 | Select + R1 | swap D-pad and left stick |
+| Select + R2 | change graphics preset (Full / Fast / Fastest) |
 
 ## Settings
 
@@ -44,6 +45,7 @@ Optional `ports/nfshp2/nfshp2.cfg`, one `NAME=value` per line:
 - `NFSHP2_QUALITY=0`, `1` or `2`: graphics preset to start on (0 full, 2 fastest).
 - `NFSHP2_ASPECT=0`: the PS2's 4:3 picture with bars, instead of filling the screen.
 - `NFSHP2_GLYPHS=ps2` or `xbox`: prompts in the PlayStation symbols, or in an Xbox-layout pad's letters, instead of the handheld's own A/B/X/Y.
+- NFSHP2_DPAD_STICK=1: start with D-pad and left stick swapped.
 
 ## Notes
 

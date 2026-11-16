@@ -1,303 +1,209 @@
-# Need for Speed: Hot Pursuit 2 for the New 3DS
+# Need for Speed: Hot Pursuit 2 for R36S & PortMaster Handhelds
 
-An unofficial homebrew port of the PS2 version of **Need for Speed: Hot
-Pursuit 2** to the New Nintendo 3DS. It is the PS2 game itself, not a
-remake: its code was reverse-engineered from the retail disc and
-reimplemented in C, function by function, and checked against the disc's
-own code. It plays from your own disc's files, which you copy to the SD
-card. No game data comes with it.
+An unofficial native port of the PlayStation 2 version of **Need for Speed: Hot Pursuit 2** (2002) to Linux handhelds (R36S, Anbernic RG35XX/RG34XX, Powkiddy, RK3326, Allwinner H700, and other PortMaster-compatible devices), with continued support for the New Nintendo 3DS.
 
-What you get is the PS2 game: Hot Pursuit and World Racing, Quick Race,
-You're The Cop, the challenges and the career, the cops and the
-helicopter, the replays, the EA TRAX jukebox, every car and track, the
-saves, and the PS2's cheat codes. The top screen shows the race and the
-bottom screen the map and the standings. On top of that, Local Wireless
-races up to eight New 3DS consoles against each other.
+It is the PS2 game itself, not an emulator or a remake: the code was reverse-engineered function-by-function from the retail PAL disc (`SLES-50731`) and reimplemented in C. It runs from your own disc's assets, which you install on the device. **No proprietary game data is distributed with this repository.**
 
-## What you need
+---
 
-- A **New 3DS, New 3DS XL or New 2DS XL** with custom firmware (Luma3DS)
-  and FBI. An Old 3DS or 2DS shows a message at boot and stops: it has too
-  little memory and a third of the speed.
-- **Your own PS2 disc** of Need for Speed: Hot Pursuit 2 (specifically
-  SLES-50731, the PAL version). Other discs are untested.
-- About **2.9 GB** free on the SD card.
-- A computer with **Python 3.8 or newer** (nothing else to install) and
-  about 7 GB free for the steps below.
+## Features
 
-## Installing
+- **Full PS2 Experience:** Hot Pursuit and World Racing modes, Quick Race, You're The Cop, Championship, Ultimate Racer, the career events, police chases with helicopter pursuit, replays, the complete EA TRAX jukebox, every licensed car and track, and the original PS2 cheat codes.
+- **Native Single-Screen 640x480 Framing:** Replaces the dual-screen 3DS presentation with native PS2 single-screen rendering, complete with original PS2 camera field of view, HUD layouts, and dynamic minimap and tachometer anchoring across 4:3, 3:2, and 16:9 displays.
+- **High-Performance GLES Renderer:** Citro3D/Citro2D graphics commands are translated to an optimized OpenGL ES 2.0 / 3.0 backend. Features an independent GL worker thread (`glthread`), persistent GPU vertex/index buffer caching (VBOs), opaque instancing, and persistent shader program caching (`nfshp2_programs.bin`).
+- **On-Device Disc Installer:** Drop your PS2 `.iso` file directly into `ports/nfshp2/gamedata/` and launch the game. The port automatically unpacks `ZDIR.BIN` and `ZZDATA.BIN`, decompresses all 30 track archives, and packs audio banks on the device.
+- **Handheld Quality-of-Life:**
+  - **FPS & Performance Overlay:** Live frame rate, frame times, draw calls, and CPU/GPU metrics (`Select + L1`, or `L3` / `R3`).
+  - **Stick / D-Pad Swap:** Instant toggle between Left Analog Stick and D-Pad steering (`Select + R1`) for stickless handhelds.
+  - **Live Quality Presets:** Real-time cycling between graphics presets (`Select + R2`: Full, Fast, Fastest).
+  - **Safe Exit:** Clean shutdown on `Select + Start` (held for 1 second).
 
-1. In this repository's top folder, make a `PS2 Files/Full Game/` folder
-   and copy `ZDIR.BIN` and `ZZDATA.BIN` from the root of your disc into
-   it. Run the commands below from the top folder too.
-2. Extract the disc's files into `extracted-retail/` (3.3 GB, a minute or
-   two):
+---
 
+## Supported Devices & Systems
+
+- **Rockchip RK3326:** R36S, R35S, Powkiddy RGB20S, RG351P/M/V/MP running ArkOS, dArkOS, AmberELEC.
+- **Allwinner H700:** Anbernic RG35XX (2024), RG35XX Plus, RG35XX H, RG34XX, RG40XX running Knulli or Batocera.
+- **General Linux Handhelds:** Any 32-bit `armhf` Linux distribution equipped with SDL2 and OpenGL ES 2.0/3.0.
+- **New Nintendo 3DS:** New 3DS, New 3DS XL, and New 2DS XL running Luma3DS custom firmware (supports Local Wireless multiplayer up to 8 consoles).
+
+---
+
+## Installation (PortMaster / Linux Handhelds)
+
+### Method A: Automated On-Device Installation from ISO (Recommended)
+
+1. Copy the PortMaster package (`NFSHP2.sh` and the `nfshp2/` directory) to your SD card's `ports/` directory (e.g. `roms/ports/` or `ports/`).
+2. Copy your PAL PS2 disc ISO image (`SLES-50731`) to:
    ```
+   ports/nfshp2/gamedata/your_disc.iso
+   ```
+   *(Ensure you have at least 3 GB of free space on your SD card beside the ISO).*
+3. Launch **Need for Speed: Hot Pursuit 2** from your Ports menu.
+4. The first launch automatically extracts the game assets, expands track files, and builds sound banks (progress is displayed on screen and logged to `ports/nfshp2/patchlog.txt`). The process takes about 8 to 10 minutes on an RK3326.
+5. Once the game boots to the language select screen, the installation is complete. You can safely delete the `.iso` file from `ports/nfshp2/gamedata/`.
+
+### Method B: Manual Extraction on PC (Faster / No Python on Device)
+
+If your device firmware does not have `python3`, or you prefer faster extraction:
+
+1. Copy `ZDIR.BIN` and `ZZDATA.BIN` from your PAL disc's `NFSHP2/` folder into `PS2 Files/Full Game/`.
+2. From the repository root on your computer (requires Python 3.8+):
+   ```bash
    python tools/zdir_extract.py --retail --decompress
-   ```
-
-3. Turn the sound banks into the 3DS's format:
-
-   ```
    python tools/audio_pack.py extracted-retail/SOUND extracted-retail/SOUND
+   python tools/make_card.py card
+   ```
+3. Copy the resulting `card/NFSHP2` folder to your handheld SD card at:
+   ```
+   ports/nfshp2/gamedata/NFSHP2
    ```
 
-4. Copy the files the game reads to the SD card, here with the card in
-   your computer as `E:`:
-
-   ```
-   python tools/make_card.py E:\
-   ```
-
-   That makes `E:\NFSHP2` (2.9 GB), so that
-   `sdmc:/NFSHP2/GLOBAL/GLOBALB.BUN` exists. Give it a folder instead
-   and it makes the `NFSHP2` folder there, for you to copy to the card's
-   root. Don't copy `extracted-retail/` over as it is: it holds the
-   tracks a second time, packed, and the game would load those.
-5. Install `NFSHP2-3DS.cia`, from this repository's Releases page or
-   built as below, with FBI and start it from the HOME Menu. The
-   `.3dsx` runs from the Homebrew Launcher as well, but the CIA is what has
-   been tested on hardware.
-
-Saves go to `sdmc:/NFSHP2/SAVES`, made the first time the game saves. A
-screen that changes your save asks whether to save when you leave it.
-
-If the game stops at boot saying a file is missing or isn't the disc's, or
-a step above says `extracted-retail` came from an older `zdir_extract.py`,
-the files were extracted wrongly. Older copies of the tools could put
-another disc's files under the wrong names. Get the current tools, delete
-`extracted-retail/`, and do steps 2 to 4 again. Run step 4 as
-`python tools/make_card.py E:\ --prune` so it also deletes the old files
-on the card. It keeps `NFSHP2/SAVES`.
+---
 
 ## Controls
 
-### In a race
+### In a Race
 
-| Key | Racer | You're The Cop |
+| Handheld Button | Racer Action | You're The Cop Action |
 | --- | --- | --- |
-| Circle Pad, D-pad Left / Right | steer | steer |
-| A | gas | gas |
-| B | brake and reverse | brake and reverse |
-| X | horn | change the target |
-| Y | change the camera | change the camera |
-| L | look back | call a roadblock |
-| R | handbrake | call the helicopter |
-| ZL | shift down | nitro |
-| ZR | shift up | shift up |
-| D-pad Down | | shift down |
-| D-pad Up | change the HUD | change the HUD |
-| C-Stick up / down | gas / brake | gas / brake |
-| START | pause | pause |
+| Left Analog Stick / D-Pad Left & Right | Steer | Steer |
+| B (Bottom button) | Accelerate | Accelerate |
+| Y (Left button) | Brake & Reverse | Brake & Reverse |
+| A (Right button) | Horn | Change Target |
+| X (Top button) | Change Camera | Change Camera |
+| L1 | Look Back | Call Roadblock |
+| R1 | Handbrake | Call Helicopter |
+| L2 | Shift Down (Manual) / Zone Freeze (Auto) | Nitro |
+| R2 | Shift Up (Manual) / Zone Preview (Auto) | Shift Up |
+| Right Analog Stick Up / Down | Accelerate / Brake | Accelerate / Brake |
+| D-Pad Up | Change HUD Mode | Change HUD Mode |
+| Start | Pause | Pause |
 
-With the automatic gearbox, shift down is Zone Freeze and shift up Zone
-Preview; Y held with either does the same with the manual gearbox, as on
-the PS2. The keys in the table can be changed in Options, Controller,
-for the racer and the cop separately; steering, the C-Stick and START
-stay where they are.
+### In-Game Shortcuts
 
-### In the menus
-
-The D-pad or the Circle Pad moves, A selects, B goes back and Y shows the
-help. In the pause menu and on the screens at a race's end, X goes back
-instead of B, as the PS2's Triangle does there.
-
-## Local Wireless
-
-Local Wireless on the main menu races two to eight New 3DS consoles. Each
-needs the game and the disc's files on its own SD card. One console hosts
-and picks the race; the others join it. The host can fill the grid with
-CPU racers.
-
-## Cheat codes
-
-The PS2 game's cheat codes are entered on the main menu: press the eight
-keys in order and the menu says "Unlocked" and what. On the main menu L,
-ZL, R and ZR are the PS2's L1, L2, R1 and R2, X is Square and B is
-Triangle.
-
-A car, track or bonus-event code stays on until you switch the game off.
-A picture code (Motion Blur, Black & White, Heavy Fog, R/C Car, Video
-Mode, Chrome Cars) lasts the next race, and only one at a time works.
-Nothing is saved.
-
-### Picture and bonus codes
-
-| Unlocks | 3DS keys |
+| Combination | Action |
 | --- | --- |
-| Motion Blur | ZL, L, R, X, R, R, R, L |
-| Black & White | R, L, D-pad Left, B, D-pad Left, D-pad Left, D-pad Left, L |
-| Heavy Fog | B, X, D-pad Right, ZR, D-pad Right, D-pad Right, D-pad Right, X |
-| R/C Car | D-pad Right, B, L, R, L, L, L, B |
-| Video Mode | L, R, D-pad Right, X, D-pad Right, D-pad Right, D-pad Right, R |
-| Championship Bonus Event | L, X, ZR, ZR, ZR, R, L, X |
-| Ultimate Racer Bonus Event | D-pad Right, X, D-pad Left, D-pad Left, D-pad Left, ZR, D-pad Right, X |
-| Chrome Cars | ZL, ZR, D-pad Left, X, D-pad Left, D-pad Left, D-pad Left, ZR |
+| **Select + Start** *(hold 1 sec)* | Clean exit to frontend / PortMaster |
+| **Select + L1** *(or L3 / R3)* | Toggle FPS & Performance Monitor Overlay |
+| **Select + R1** | Toggle D-Pad and Left Analog Stick Swap |
+| **Select + R2** | Cycle Graphics Preset (0 = Full, 1 = Fast, 2 = Fastest) |
+
+### In the Menus
+
+- **D-Pad / Left Stick:** Navigate options
+- **B (Bottom):** Select / Confirm
+- **Y (Left):** Back / Cancel (or **A / Right** depending on device mapping)
+- **X (Top):** View Help / Controller diagram
+
+---
+
+## Settings (`nfshp2.cfg`)
+
+You can customize the port by creating or editing `ports/nfshp2/nfshp2.cfg` with one `KEY=value` per line:
+
+| Option | Values | Default | Description |
+| --- | --- | --- | --- |
+| `NFSHP2_SHOW_FPS` | `0` or `1` | `0` | Enable FPS & hardware performance overlay at launch |
+| `NFSHP2_QUALITY` | `0`, `1`, `2` | `0` | Graphics preset (`0` = Full, `1` = Fast, `2` = Fastest with 75% render scale) |
+| `NFSHP2_ASPECT` | `0` or `1` | `1` | `1` stretches view to screen edges; `0` forces pillarboxed 4:3 PS2 ratio |
+| `NFSHP2_DPAD_STICK` | `0` or `1` | `0` | Launch with D-Pad and Left Analog Stick steering swapped |
+| `NFSHP2_GLYPHS` | `ps2`, `xbox`, `nintendo` | `nintendo` | Button prompt glyph style on screen |
+| `NFSHP2_RENDER_SCALE` | `0.25` to `1.0` | `1.0` | Render target scale factor (e.g. `0.75` for 75% internal resolution) |
+
+---
+
+## Cheat Codes
+
+Enter these 8-button sequences on the Main Menu to unlock bonus cars, tracks, and picture modes:
+
+### Picture Modes & Bonus Events
+
+| Unlock | Key Sequence (Nintendo Handheld Layout) |
+| --- | --- |
+| Motion Blur Mode | L2, L1, R1, Y, R1, R1, R1, L1 |
+| Black & White Mode | R1, L1, D-Pad Left, B, D-Pad Left, D-Pad Left, D-Pad Left, L1 |
+| Heavy Fog Mode | B, Y, D-Pad Right, R2, D-Pad Right, D-Pad Right, D-Pad Right, Y |
+| R/C Car Mode | D-Pad Right, B, L1, R1, L1, L1, L1, B |
+| Video Mode | L1, R1, D-Pad Right, Y, D-Pad Right, D-Pad Right, D-Pad Right, R1 |
+| Chrome Cars | L2, R2, D-Pad Left, Y, D-Pad Left, D-Pad Left, D-Pad Left, R2 |
+| Championship Bonus Event | L1, Y, R2, R2, R2, R1, L1, Y |
+| Ultimate Racer Bonus Event | D-Pad Right, Y, D-Pad Left, D-Pad Left, D-Pad Left, R2, D-Pad Right, Y |
 
 ### Cars
 
-| Unlocks | 3DS keys |
+| Unlock | Key Sequence |
 | --- | --- |
-| McLaren F1 | B, L, B, L, R, D-pad Left, R, D-pad Left |
-| McLaren F1: NFS | D-pad Left, B, B, B, ZL, X, X, B |
-| McLaren F1 LM | X, L, X, L, B, D-pad Right, B, D-pad Right |
-| McLaren F1 LM: NFS | R, X, X, X, ZR, D-pad Left, D-pad Left, X |
-| Mercedes CLK-GTR | ZR, R, ZR, R, D-pad Left, B, D-pad Left, B |
-| Mercedes CLK-GTR: NFS | B, D-pad Left, D-pad Left, D-pad Left, L, ZL, ZL, D-pad Left |
-| Chevrolet Corvette Z06 | D-pad Left, ZR, D-pad Left, ZR, L, R, L, R |
-| Chevrolet Corvette: NFS | X, D-pad Right, D-pad Right, D-pad Right, ZR, R, R, D-pad Right |
-| Dodge Viper GTS: NFS | L, ZL, ZL, ZL, D-pad Right, B, B, ZL |
-| Ferrari F50 | L, B, L, B, D-pad Right, ZL, D-pad Right, ZL |
-| Ferrari F50: NFS | B, L, L, L, D-pad Left, D-pad Right, D-pad Right, L |
-| Lamborghini Diablo 6.0 VT | D-pad Right, ZR, D-pad Right, ZR, R, L, R, L |
-| Lamborghini Diablo: NFS | X, ZR, ZR, ZR, B, R, R, ZR |
-| Lamborghini Murcielago | R, ZL, R, ZL, L, D-pad Right, L, D-pad Right |
-| Lamborghini Murcielago: NFS | L, ZR, ZR, ZR, D-pad Left, X, X, ZR |
-| Porsche 911 Turbo: NFS | D-pad Right, D-pad Left, D-pad Left, D-pad Left, B, R, R, D-pad Left |
-| Porsche Carrera GT | D-pad Left, D-pad Right, D-pad Left, D-pad Right, R, ZR, R, ZR |
-| Porsche Carrera GT: NFS | ZR, B, B, B, R, X, X, B |
-| Aston Martin V12 Vanquish | ZR, D-pad Right, ZR, D-pad Right, B, D-pad Left, B, D-pad Left |
-| V12 Vanquish: NFS | X, D-pad Left, D-pad Left, D-pad Left, R, ZR, ZR, D-pad Left |
-| BMW Z8 | X, D-pad Right, X, D-pad Right, ZR, B, ZR, B |
-| Ferrari 360 Challenge | D-pad Left, X, X, X, R, ZL, ZL, X |
-| Ferrari 360 Spider | ZR, X, ZR, X, B, ZL, B, ZL |
-| Ferrari 550 Barchetta | L, X, L, X, D-pad Right, R, D-pad Right, R |
-| Ferrari 550 Barchetta: NFS | X, R, R, R, ZR, D-pad Left, D-pad Left, R |
-| Mustang Cobra R: NFS | R, D-pad Right, D-pad Right, D-pad Right, D-pad Left, ZR, ZR, D-pad Right |
-| HSV Coupe GTS | L, ZL, L, ZL, R, B, R, B |
-| HSV Coupe GTS: NFS | D-pad Right, ZL, ZL, ZL, L, D-pad Left, D-pad Left, ZL |
-| Jaguar XKR: NFS | L, D-pad Right, D-pad Right, D-pad Right, ZL, R, R, D-pad Right |
-| Ford TS50 | D-pad Right, D-pad Left, D-pad Right, D-pad Left, ZR, X, ZR, X |
-| Ford TS50: NFS | D-pad Right, L, L, L, R, D-pad Left, D-pad Left, L |
-| Lotus Elise | B, ZR, B, ZR, D-pad Left, X, D-pad Left, X |
-| Lotus Elise: NFS | X, L, L, L, ZR, ZL, ZL, L |
-| Mercedes CL55 AMG | L, D-pad Right, L, D-pad Right, ZL, X, ZL, X |
-| Mercedes CL55 AMG: NFS | B, ZR, ZR, ZR, R, L, L, ZR |
-| Opel Speedster: NFS | ZL, ZR, ZR, ZR, X, D-pad Left, D-pad Left, ZL |
-| Vauxhall VX220: NFS | L, R, R, R, D-pad Left, D-pad Right, D-pad Right, L |
-| Pursuit Corvette Z06 in all Challenge Modes | ZL, ZR, ZR, ZL, B, D-pad Right, B, D-pad Right |
-| Pursuit Murcielago in all Challenge Modes | R, L, L, R, D-pad Right, ZR, D-pad Right, ZR |
-| Pursuit Mustang Cobra R in all Challenge Modes | D-pad Left, X, D-pad Left, X, ZR, R, ZR, R |
-| Pursuit M5 in all Challenge Modes | X, B, B, X, D-pad Left, R, D-pad Left, R |
-| Pursuit Crown Victoria in all Challenge Modes | D-pad Right, D-pad Left, D-pad Left, D-pad Right, X, B, X, B |
+| McLaren F1 | B, L1, B, L1, R1, D-Pad Left, R1, D-Pad Left |
+| McLaren F1 LM | Y, L1, Y, L1, B, D-Pad Right, B, D-Pad Right |
+| Mercedes CLK-GTR | R2, R1, R2, R1, D-Pad Left, B, D-Pad Left, B |
+| Chevrolet Corvette Z06 | D-Pad Left, R2, D-Pad Left, R2, L1, R1, L1, R1 |
+| Ferrari F50 | L1, B, L1, B, D-Pad Right, L2, D-Pad Right, L2 |
+| Lamborghini Diablo 6.0 VT | D-Pad Right, R2, D-Pad Right, R2, R1, L1, R1, L1 |
+| Lamborghini Murcielago | R1, L2, R1, L2, L1, D-Pad Right, L1, D-Pad Right |
+| Porsche Carrera GT | D-Pad Left, D-Pad Right, D-Pad Left, D-Pad Right, R1, R2, R1, R2 |
+| Aston Martin V12 Vanquish | R2, D-Pad Right, R2, D-Pad Right, B, D-Pad Left, B, D-Pad Left |
+| BMW Z8 | Y, D-Pad Right, Y, D-Pad Right, R2, B, R2, B |
+| Ferrari 360 Spider | R2, Y, R2, Y, B, L2, B, L2 |
+| Ferrari 550 Barchetta | L1, Y, L1, Y, D-Pad Right, R1, D-Pad Right, R1 |
+| HSV Coupe GTS | L1, L2, L1, L2, R1, B, R1, B |
+| Ford TS50 | D-Pad Right, D-Pad Left, D-Pad Right, D-Pad Left, R2, Y, R2, Y |
+| Lotus Elise | B, R2, B, R2, D-Pad Left, Y, D-Pad Left, Y |
+| Mercedes CL55 AMG | L1, D-Pad Right, L1, D-Pad Right, L2, Y, L2, Y |
 
-### Cop cars in You're The Cop
+---
 
-| Unlocks | 3DS keys |
-| --- | --- |
-| Pursuit Corvette Z06 in You're The Cop Mode | ZR, L, L, ZR, R, D-pad Right, D-pad Right, R |
-| Pursuit Murcielago in You're The Cop Mode | D-pad Right, ZL, ZL, D-pad Right, X, D-pad Left, D-pad Left, X |
-| Pursuit Mustang Cobra R in You're The Cop Mode | D-pad Left, B, B, D-pad Left, R, ZR, ZR, R |
-| Pursuit M5 in You're The Cop Mode | B, X, X, B, L, R, R, L |
+## Building from Source
 
-### Tracks
+### R36S & Linux Handhelds (`armhf` / `aarch64`)
 
-| Unlocks | 3DS keys |
-| --- | --- |
-| Coastal Parklands II | ZR, ZR, D-pad Left, D-pad Left, D-pad Left, ZR, R, L |
-| National Forest | X, X, ZL, ZL, R, R, D-pad Left, D-pad Left |
-| National Forest II | D-pad Left, D-pad Left, L, L, L, D-pad Left, D-pad Right, X |
-| Scenic Drive II | ZL, ZL, L, L, L, ZL, B, X |
-| Desert Heat II | R, R, ZR, ZR, ZR, R, L, D-pad Left |
-| Outback | B, B, D-pad Right, D-pad Right, L, L, R, R |
-| Outback II | L, L, B, B, B, L, X, D-pad Right |
-| Rocky Canyons | R, R, D-pad Left, D-pad Left, X, X, D-pad Right, D-pad Right |
-| Rocky Canyons II | X, X, B, B, B, X, L, D-pad Left |
-| Ancient Ruins II | D-pad Right, D-pad Right, D-pad Left, D-pad Left, D-pad Left, D-pad Right, L, X |
-| Calypso Coast | ZR, ZR, R, R, L, L, B, B |
-| Calypso Coast II | B, B, D-pad Right, D-pad Right, D-pad Right, B, X, L |
-| Mediterranean Paradise II | X, X, D-pad Right, D-pad Right, D-pad Right, X, D-pad Left, ZL |
-| Fall Winds II | ZR, ZR, X, X, X, ZR, D-pad Left, R |
-| Alpine Trail | X, X, B, B, D-pad Left, D-pad Left, ZL, ZL |
-| Alpine Trail II | D-pad Left, D-pad Left, ZR, ZR, ZR, D-pad Left, R, X |
-| Autumn Crossing | D-pad Right, D-pad Right, B, B, R, R, D-pad Left, D-pad Left |
-| Autumn Crossing II | R, R, D-pad Right, D-pad Right, D-pad Right, R, ZR, B |
-| Island Outskirts II | ZL, ZL, R, R, R, ZL, D-pad Left, ZR |
-| Palm City Island | D-pad Left, D-pad Left, R, R, D-pad Right, D-pad Right, X, X |
-| Palm City Island II | D-pad Right, D-pad Right, ZR, ZR, ZR, D-pad Right, R, D-pad Left |
-| Tropical Circuit | ZR, ZR, B, B, D-pad Right, D-pad Right, R, R |
-| Tropical Circuit II | L, L, D-pad Right, D-pad Right, D-pad Right, L, X, ZR |
+The build is automated inside Docker:
 
-The PS2 game's Pet Helicopter code has no keys on the disc, so nothing
-can enter it. `docs/formats/easter-eggs.md` has every code with its PS2
-buttons too.
+```bash
+# 32-bit ARM build (recommended for R36S / PortMaster)
+sh r36s/build.sh
 
-## The config file
+# 64-bit ARM build
+ARCH=aarch64 sh r36s/build.sh
 
-`sdmc:/nfshp2_config.txt` is optional. Each line is a name and a number,
-and a line the game doesn't know does nothing. The ones a player might
-want:
+# Package into PortMaster zip and folder layout
+sh r36s/package.sh
+```
 
-| Line | What it does |
-| --- | --- |
-| `DebugLog 1` | writes `sdmc:/nfshp2_debug.txt`, for a bug report |
-| `PauseLog 1` | keeps the last 3 seconds of a race and writes `sdmc:/nfshp2_pause_N.bin` when you pause, for a graphics bug |
-| `FallLog 1` | with `DebugLog 1`, logs your car's collisions every frame, for a car that falls through the road |
-| `DemoReplays 1` | lets attract mode start the disc's demo replays (on the 3DS they leave the PS2's path after one frame and end, so they are off by default) |
-| `DemoReplayDrift 1` | with `DemoReplays 1` and `DebugLog 1`, a demo replay plays on past that point, and the log counts the frames that left the path |
-| `DemoReplayFile N` | with `DemoReplays 1`, attract mode plays the disc's replay file N (1 to 6) each time, where the game would pick one by chance |
-| `EggCodes N` | turns cheat codes on at boot by N's bits, as entering them does: 1 Motion Blur, 2 Black & White, 4 Heavy Fog, 8 R/C Car, 16 Video Mode, 256 Chrome Cars |
+The resulting package is output to `r36s/build/portmaster/nfshp2.zip`.
 
-## Known issues
+### New Nintendo 3DS
 
-- On Ancient Ruins, at the curb turn by the cones, the road can vanish
-  for a frame or two.
-- The frame rate drops below 30 in the heaviest places: the fire on
-  Coastal Parklands, the end of Desert Heat, and by some roadblocks.
-- On Coastal Parklands, the low stone wall before the tunnel can look
-  blocky and flicker when seen side-on.
-- Attract mode doesn't play the disc's demo replays: on the 3DS they
-  leave the PS2's path after one frame, so it plays its AI race demo
-  instead. `DemoReplays 1` in the config file turns them back on.
-- In Local Wireless, the consoles can fall out of step just after a
-  player finishes (two races in eight in testing): that car, driven by
-  the CPU from the finish on, can end up in a different place on each
-  console.
-- In French, the LOADING screen and the Need for Speed logo keep their
-  English art.
-- The language screen at boot appears at once, without the PS2's
-  slide-in.
-
-## Building from source
-
-Requires devkitPro's 3DS tools (`DEVKITPRO` and `DEVKITARM` set up). In
-PowerShell:
+Requires devkitPro with `DEVKITARM`:
 
 ```powershell
 & .\tools\build_cia.ps1
 ```
 
-It works around the space in the path and produces
-`3DS Files/NFSHP2-3DS.3dsx` and `.cia`.
+Generates `3DS Files/NFSHP2-3DS.3dsx` and `NFSHP2-3DS.cia`.
 
-- `3DS Files/` -- the devkitARM project.
-- `tools/` -- the Python reverse-engineering and data tools, and the
-  vendored `makerom` and `bannertool`. The `*_check.py` scripts run the
-  disc's own code in a MIPS emulator (`tools/mipsemu.py`) beside the
-  port's, and their `--mutate` passes break the port on purpose to show
-  that the check notices.
-- `docs/formats/` -- write-ups of every file format and system.
-- `HANDOFF.md` -- the session-by-session engineering log.
-- `TASKS.md` -- the numbered task list.
-- `PS2 Files/` -- your own disc's files, never in the repository.
+---
 
-## About
+## Project Structure
 
-A fan project, not made, endorsed or supported by Electronic Arts.
-Need for Speed Hot Pursuit 2 and Need for Speed are Electronic Arts' trademarks. The
-repository holds no game data: the port runs only with files from a disc
-you own. The one exception is the CIA's HOME Menu icon, banner and
-siren: `tools/make_banner.py` makes them from the disc's files, and they
-are kept in `3DS Files/meta/hp2` so the CIA builds without the disc.
+- `r36s/` -- R36S / Linux handheld compatibility layer (`r36s/compat`), GL worker thread, PortMaster launcher (`NFSHP2.sh`), ISO installer, and Dockerfiles.
+- `3DS Files/` -- Source code of the reverse-engineered game engine in C.
+- `tools/` -- Extraction and conversion tools (`zdir_extract.py`, `audio_pack.py`, `make_card.py`).
+- `docs/` -- Architecture documentation, R36S optimization backlog, and reverse-engineered file format specs.
+- `HANDOFF.md` -- Detailed session-by-session engineering changelog.
+
+---
+
+## Credits & Acknowledgements
+
+- **Electronic Arts & EA Black Box:** Original creators of Need for Speed: Hot Pursuit 2.
+- **Octoblimp & Contributors:** Complete PS2 game decompilation and New Nintendo 3DS port.
+- **Manuel Peña Llull ([@manuelpllull](https://github.com/manuelpllull)):** R36S / Linux handheld port, GLES rendering layer, GL threading, single-screen framing, PortMaster integration, and engine audio fixes.
+- **AI Pairing:** Developed in collaboration with Claude Opus 5.5 and Antigravity (Google DeepMind).
+
+---
 
 ## License
 
-The port's own code is under the GNU General Public License, version 3
-(`LICENSE`). It covers the code alone: the game, its data and its art
-stay Electronic Arts'. The vendored `makerom` and `bannertool` keep their
-own licenses.
-
-## AI Disclosure
-
-Claude Opus 5.5 was used to help make this project possible. Specifically, it decompiled the game in full and ported it to the 3DS, and helped me debug in Azahar, then I tested by myself on real hardware (on a New Nintendo 3DS XL).
+This project is licensed under the **GNU General Public License v3.0** (`LICENSE`).  
+*Need for Speed* and *Need for Speed: Hot Pursuit 2* are registered trademarks of Electronic Arts Inc. This fan-made open-source port is not affiliated with, authorized, or endorsed by Electronic Arts. No copyrighted assets or proprietary binaries are included.
