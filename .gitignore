@@ -1,5 +1,7 @@
 # Original PS2 game dump - not distributable, kept locally only
 /PS2 Files/
+/*.iso
+/card/
 
 # Build artifacts
 3DS Files/build/

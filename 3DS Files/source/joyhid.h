@@ -82,6 +82,10 @@
 #define JOYHID_L      (1u << 9)
 #define JOYHID_X      (1u << 10)
 #define JOYHID_Y      (1u << 11)
+#ifdef NFSHP2_R36S
+#define JOYHID_L3     (1u << 12)
+#define JOYHID_R3     (1u << 13)
+#endif
 #define JOYHID_ZL     (1u << 14)
 #define JOYHID_ZR     (1u << 15)
 
@@ -148,7 +152,13 @@ extern int32_t (*gJoyHidRaceLayoutFn)(void);
 #define JOYHID_BIND_ZR     7
 #define JOYHID_BIND_DUP    8
 #define JOYHID_BIND_DDOWN  9
+#ifdef NFSHP2_R36S
+#define JOYHID_BIND_R3     10
+#define JOYHID_BIND_L3     11
+#define JOYHID_BIND_KEYS   12
+#else
 #define JOYHID_BIND_KEYS   10
+#endif
 #define JOYHID_BIND_NONE   0xff     // the action has no key
 
 // The key each action is on: one table for a racer (RACE) and one for the

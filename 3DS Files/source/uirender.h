@@ -231,6 +231,7 @@ void uirender_override_texture(UIRenderer* r, uint32_t hash, C3D_Tex* tex,
 // Track's slideshow, 159 pictures -- does not fill the table. A hash a
 // bundle has keeps its slot.
 void uirender_forget_texture(UIRenderer* r, uint32_t hash);
+bool uirender_bundles_have_texture(UIRenderer* r, uint32_t hash);
 
 // Draws one screen: layers 0..28 in order, objects in file order within a
 // layer, which is what FlailerRenderManager's LayerRenderInfoTable does.

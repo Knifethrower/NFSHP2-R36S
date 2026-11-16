@@ -224,6 +224,12 @@ typedef struct {
 
 #define SHOWS(a) ((int8_t)((a) | JOYCFG_SHOWS))
 
+#ifdef NFSHP2_R36S
+#define COP_CALL(a) SHOWS(a)
+#else
+#define COP_CALL(a) (a)
+#endif
+
 static const Slot kSlots[] = {
     { 0x487e6614u, 0x426b9bb0u, 0, 2, JOYHID_ACT_THROTTLE,
       JOYHID_ACT_THROTTLE, LANG_THROTTLE, LANG_THROTTLE },
@@ -247,9 +253,9 @@ static const Slot kSlots[] = {
       JOYHID_ACT_LOOKBACK, LANG_LOOKBACK, LANG_LOOKBACK },
     // The automatic box's Zone rows: the shift keys alone; the cop's calls.
     { 0xd565eebbu, 0x6c443937u, 1, 5, SHOWS(JOYHID_ACT_SHIFTDOWN),
-      JOYHID_ACT_ROADBLOCK, LANG_ZONEFREEZE, PORTLANG_ROADBLOCK },
+      COP_CALL(JOYHID_ACT_ROADBLOCK), LANG_ZONEFREEZE, PORTLANG_ROADBLOCK },
     { 0xdc950ebfu, 0x595759bbu, 1, 6, SHOWS(JOYHID_ACT_SHIFTUP),
-      JOYHID_ACT_HELICOPTER, LANG_ZONEZOOM, PORTLANG_HELICOPTER },
+      COP_CALL(JOYHID_ACT_HELICOPTER), LANG_ZONEZOOM, PORTLANG_HELICOPTER },
     // The Manual half's, the camera's key with the shift key: the racer's.
     { 0x3991ed98u, 0x55f013b4u, 1, 7, SHOWS(JOYHID_ACT_SHIFTDOWN), -1,
       LANG_ZONEFREEZE, LANG_ZONEFREEZE },
@@ -357,6 +363,18 @@ static void redraw(ConfigScreen* c)
                                         c->cop ? s->langCop : s->langRacer);
         printGlyph(screen, s->glyph,
                    on ? helpglyph_key_char(t[a & ~JOYCFG_SHOWS]) : 0);
+#ifdef NFSHP2_R36S
+        if (c->cop && (a == SHOWS(JOYHID_ACT_ROADBLOCK)
+                       || a == SHOWS(JOYHID_ACT_HELICOPTER))) {
+            int shift = a == SHOWS(JOYHID_ACT_ROADBLOCK)
+                            ? JOYHID_ACT_SHIFTUP : JOYHID_ACT_SHIFTDOWN;
+            unsigned char gear = helpglyph_key_char(t[shift]);
+            unsigned char camera = helpglyph_key_char(t[JOYHID_ACT_CAMERA]);
+            printGlyph(screen, s->glyph, gear);
+            if (gear && camera)
+                flailer_printf(screen, s->glyph, "%c / %c+%c", gear, camera, gear);
+        }
+#endif
     }
     // The racer's Manual Zone rows have the camera's key too.
     printGlyph(screen, OBJ_FREEZE_CAMERA,
@@ -771,9 +789,15 @@ const char* joyconfig_bottom_hint(void)
 
     if (!pageUp()) return NULL;
     if (c->waiting) return "\x80 Cancel";
+#ifdef NFSHP2_R36S
+    if (c->cursor == ROW_TABLE)
+        return "\x84\x85 Racer/Cop  \x87 Back\n\x88 Defaults";
+    return "\x86 Change  \x87 Back\n\x88 Defaults";
+#else
     // Two lines, A's (or the arrows') and B's on top, X's under them: one
     // line of three did not fit beside the logo.
     if (c->cursor == ROW_TABLE)
         return "\x84\x85 Racer/Cop  \x89 Back\n\x87 Defaults";
     return "\x86 Change  \x89 Back\n\x87 Defaults";
+#endif
 }

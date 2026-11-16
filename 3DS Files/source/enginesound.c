@@ -492,9 +492,11 @@ void playerenginesound_update_to_red_line_rpm(PlayerEngineSound *s,
 
         if (gear >= 2) {
             float red = ei->RedLineRPM + s->RedLineRPMOffset;
-            float shift = dt->ShiftUpRPM[gear + 1];
+            float shift = dt->ShiftUpRPM[gear];
             float ratio;
 
+            if (shift <= 0.0f)
+                shift = red;
             if (red < shift)
                 shift = red;
             ratio = ee_div(red, shift);
@@ -505,6 +507,8 @@ void playerenginesound_update_to_red_line_rpm(PlayerEngineSound *s,
             r = min_f(r, ei->MaxRPM * ratio);
         }
     }
+    if (r < 0.0f)
+        r = 0.0f;
     c->State.RedLineSyncRPM = r;
     *rpm = r;
 }
@@ -682,12 +686,14 @@ void playerenginesound_update(PlayerEngineSound *s, float volume,
     rpm = car_rpm(c) - (float)(uint16_t)cti->Sound.IdleOffset;
     playerenginesound_update_to_red_line_rpm(s, &rpm);
     s->CurrentRPM = smooth4(s->CurrentRPM, rpm, 270.0f, 650.0f);
+    if (s->CurrentRPM < 0.0f)
+        s->CurrentRPM = 0.0f;
     playerenginesound_update_engine_ducker(s);
     playerenginesound_update_nitro_effect(s, volume, azimuth, pitch);
 
     vol = ee_trunc_w(volume * 127.0f);
-    ratio = min_i(440, ee_trunc_w(ee_div(s->CurrentRPM, cti->Engine.MaxRPM)
-                                  * 440.0f));
+    ratio = clamp_i(ee_trunc_w(ee_div(s->CurrentRPM, cti->Engine.MaxRPM)
+                               * 440.0f), 0, 440);
     dist2 = ee_trunc_w(dist * dist);
     dop = ee_trunc_w(pitch * 65536.0f);
     thr = s->CurrThrottle;

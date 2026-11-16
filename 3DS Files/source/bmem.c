@@ -1,6 +1,7 @@
 // bmem -- see bmem.h.
 
 #include "bmem.h"
+#include "objsize.h"
 
 #include <malloc.h>
 #include <stdio.h>
@@ -31,6 +32,12 @@ void *bMalloc(int size, const char *name, int flags, int pool)
     size_t align = pool_alignment(pool);
     void  *p;
 
+#ifdef NFSHP2_R36S
+    // An object allocated by the image's literal size is bigger on the
+    // R36S's 64-bit build (objsize.h); a small block gets room for that.
+    if (size > 0 && size <= BMEM_R36S_OBJECT_MAX)
+        size = RETAIL_OBJ_SIZE(size);
+#endif
     if (g_malloc != NULL)
         return g_malloc(size, name, flags, pool);
     // The image's bMalloc cannot fail: bWare asserts inside the bank

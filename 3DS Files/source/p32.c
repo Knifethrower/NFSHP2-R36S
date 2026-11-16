@@ -3,7 +3,19 @@
 
 #include "p32.h"
 
-#if UINTPTR_MAX != 0xffffffffu
+#if UINTPTR_MAX != 0xffffffffu && defined(NFSHP2_R36S)
+
+#include <stdio.h>
+#include <stdlib.h>
+
+void p32_too_high(const void *p)
+{
+    fprintf(stderr, "p32: %p does not fit a 32-bit slot\n", p);
+    fflush(NULL);
+    abort();
+}
+
+#elif UINTPTR_MAX != 0xffffffffu
 
 #include <stdio.h>
 #include <stdlib.h>

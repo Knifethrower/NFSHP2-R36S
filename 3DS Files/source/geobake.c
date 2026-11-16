@@ -7,6 +7,12 @@
 
 #include "estripdata.h"
 
+#ifdef NFSHP2_R36S
+// The R36S's GL layer keeps a baked mesh in GPU buffers, told here when
+// one is made and when georender_refresh changes it.
+#include "r36s_platform.h"
+#endif
+
 #ifdef __3DS__
 #include <3ds.h>
 #define block_alloc linearAlloc
@@ -494,6 +500,10 @@ static bool bake(const GeoSolid* solid, GeoMesh* out, bool editable)
         memcpy(out->ibo, idx, (size_t)at * sizeof *idx);
         out->numVerts   = set.n;
         out->numIndices = at;
+#ifdef NFSHP2_R36S
+        r36s_mesh_static(out->vbo, (size_t)set.n * sizeof *set.vert,
+                         out->ibo, (size_t)at * sizeof *idx);
+#endif
         for (i = 0; i < out->numBatches; i++) {
             const GeoBatch* b = &out->batch[i];
 
@@ -600,6 +610,9 @@ bool georender_refresh(const GeoSolid* solid, GeoMesh* mesh)
                           clusters + b->cluster);
         }
     }
+#ifdef NFSHP2_R36S
+    r36s_mesh_changed(mesh->vbo);
+#endif
     return true;
 }
 

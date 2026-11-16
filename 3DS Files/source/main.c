@@ -111,6 +111,9 @@
 #include "credits.h"
 #include "netrace.h"
 #include "netstep.h"
+#include "fpctl.h"
+#include "objsize.h"
+#include "screen.h"
 #include "wireless.h"
 #include "wirelesstest.h"
 #include "cop.h"
@@ -1946,7 +1949,11 @@ static int sdPath(const SdCard* c, char* out, size_t cap)
 // controls.bin beside settings.db, written with its every save and read
 // with its every load (hookFredLoaded). No file, or not one joyhid takes,
 // is the defaults.
+#ifdef NFSHP2_R36S
+#define CONTROLS_FILE SAVES_DIR "/controls-ps2.bin"
+#else
 #define CONTROLS_FILE SAVES_DIR "/controls.bin"
+#endif
 
 static void controlsSave(void)
 {
@@ -4526,7 +4533,7 @@ static void hookCarSelRenderText(void* user, uint32_t screen,
 {
     Boot*       b = (Boot*)user;
     float       x = 0.0f, y = 0.0f;
-    float       sx = 400.0f / 640.0f, sy = 240.0f / 480.0f;
+    float       sx = SCREEN_TOP_W / 640.0f, sy = SCREEN_TOP_H / 480.0f;
     UIWrapStyle st;
 
     (void)scale;
@@ -4834,6 +4841,77 @@ static void trackSelSyncPictures(UIRenderer* ui)
     }
 }
 
+#ifdef NFSHP2_R36S
+// The gauges' textures on the GPU. The dial's face, the tach's face and the
+// overlay behind the speed's digits are the car's own (ChooseLoadableTextures:
+// <CAR>_KMH, <CAR>_TACH, 3RDPERSON_<rpm>, OVERLAY_<CAR>), and live in
+// HUDTEX.BIN, a streamed pack that LoadHudTextures reads as the race starts.
+// The renderer draws from its bundles, which have none of them, so the
+// needle, the digits and the red band drew over nothing. As the slideshow's
+// pictures are (above), each one the pack has loaded is decoded into a
+// texture and drawn in the bundles' place; they go when the pack unloads.
+#define HUD_PICTURES 12
+
+typedef struct {
+    uint32_t       hash;
+    const uint8_t* data;    // the record's pixels, to see it reloaded
+    C3D_Tex        tex;
+} HudPicture;
+
+static HudPicture g_hudPictures[HUD_PICTURES];
+static int        g_hudPicturesUp;
+
+static void hudDropPicture(UIRenderer* ui, HudPicture* p)
+{
+    uirender_override_texture(ui, p->hash, NULL, 0, 0, false);
+    uirender_forget_texture(ui, p->hash);
+    C3D_TexDelete(&p->tex);
+    logLine("hud picture %08lx down", (unsigned long)p->hash);
+    memset(p, 0, sizeof *p);
+    g_hudPicturesUp--;
+}
+
+static void hudSyncPictures(UIRenderer* ui)
+{
+    int i, n;
+
+    if (!pHudTexturePack || !pHudTexturePack->pTextureInfo) return;
+    n = pHudTexturePack->NumTextures;
+    // Pictures whose record has gone or been loaded again.
+    for (i = 0; i < HUD_PICTURES && g_hudPicturesUp > 0; i++) {
+        HudPicture*  p = &g_hudPictures[i];
+        TextureInfo* t;
+
+        if (!p->hash) continue;
+        t = texturepack_get_loaded_texture(pHudTexturePack, p->hash);
+        if (!t || t->ImageData != p->data) hudDropPicture(ui, p);
+    }
+    // And the pack's loaded ones that aren't up yet, and aren't a bundle's.
+    for (i = 0; i < n; i++) {
+        TextureInfo* t = &pHudTexturePack->pTextureInfo[i];
+        HudPicture*  spare = NULL;
+        int          j;
+
+        if (!t->ImageData || t->NameHash == 0) continue;
+        if (g_hudPicturesUp >= HUD_PICTURES) break;
+        for (j = 0; j < HUD_PICTURES; j++) {
+            if (g_hudPictures[j].hash == t->NameHash) break;
+            if (!g_hudPictures[j].hash && !spare) spare = &g_hudPictures[j];
+        }
+        if (j < HUD_PICTURES || !spare) continue;
+        if (uirender_bundles_have_texture(ui, t->NameHash)) continue;
+        if (!trackSelUpload(t, &spare->tex)) continue;
+        spare->hash = t->NameHash;
+        spare->data = t->ImageData;
+        g_hudPicturesUp++;
+        uirender_override_texture(ui, t->NameHash, &spare->tex, t->Width,
+                                  t->Height, false);
+        logLine("hud picture %08lx up, %s %ux%u", (unsigned long)t->NameHash,
+                t->DebugName, (unsigned)t->Width, (unsigned)t->Height);
+    }
+}
+#endif
+
 // SQUARE: SPCH_AddEventV(155, 1, Speech::ConvertTrackNumber(track)), the
 // track's name.
 static void hookTrackSelSpeak(void* user, int32_t track)
@@ -5036,7 +5114,7 @@ static uint32_t gsPlainColor(uint32_t gs)
 static void etvDrawText(UIRenderer* ui)
 {
     float       x = 0.0f, y = 0.0f, bx = 0.0f, by = 0.0f, w, h;
-    float       sx = 400.0f / 640.0f, sy = 240.0f / 480.0f;
+    float       sx = SCREEN_TOP_W / 640.0f, sy = SCREEN_TOP_H / 480.0f;
     UIWrapStyle st;
     struct FlailerTextChunk* t;
 
@@ -5347,11 +5425,9 @@ static void demoReplayDriftStep(World* w)
 // FPSCR to put back after the step.
 static uint32_t stepRoundToZero(void)
 {
-    uint32_t fpscr;
+    uint32_t fpscr = fpctl_get();
 
-    __asm__ volatile("vmrs %0, fpscr" : "=r"(fpscr));
-    __asm__ volatile("vmsr fpscr, %0" : : "r"(fpscr | 0x00c00000u)
-                     : "memory");
+    fpctl_set(fpscr | FPCTL_RZ);
     return fpscr;
 }
 
@@ -6544,7 +6620,7 @@ static void raceFrame(void)
                 fpscr = stepRoundToZero();
                 demoReplayDriftStep(w);
                 world_do_timestep(w, step);
-                __asm__ volatile("vmsr fpscr, %0" : : "r"(fpscr) : "memory");
+                fpctl_set(fpscr);
                 logFallStep(w);
                 logStepNaN(w);
             }
@@ -7087,7 +7163,7 @@ static void drawLockHeld(UIRenderer* ui)
     uint8_t     pct, back = netstep_rejoining(&pct);
     uint8_t     held = netstep_held(now, &left) & (uint8_t)~back;
     UIWrapStyle st;
-    float       boxW = 400.0f - HELD_BOX_X * 2.0f, textW, h, y;
+    float       boxW = SCREEN_TOP_W - HELD_BOX_X * 2.0f, textW, h, y;
 
     text[0] = 0;
     if (lockCatchingUp()) {
@@ -7111,7 +7187,7 @@ static void drawLockHeld(UIRenderer* ui)
     textW = boxW - HELD_BOX_PAD * 2.0f;
     h = uirender_wrap_height(ui, text, 0, &st, textW);
     if (h <= 0.0f) return;
-    y = (240.0f - h) * 0.5f - HELD_BOX_PAD;
+    y = (SCREEN_TOP_H - h) * 0.5f - HELD_BOX_PAD;
     C2D_DrawRectSolid(HELD_BOX_X, y, 0.0f, boxW, h + HELD_BOX_PAD * 2.0f,
                       HELD_BACK);
     C2D_DrawRectSolid(HELD_BOX_X, y, 0.0f, boxW, 2.0f, BOT_ACCENT);
@@ -7226,8 +7302,8 @@ static int32_t track_fly_mover_is_finished(CameraMover* m)
 // DemoCameraCoordinator::Update's `new TrackCarCameraMover` and `new
 // DriveCameraMover`, in retail's 1136 and 1008 bytes.
 typedef char demo_camera_mover_size_check[
-    (sizeof(TrackCarCameraMover) <= 1136
-     && sizeof(DriveCameraMover) <= 1008) ? 1 : -1];
+    (sizeof(TrackCarCameraMover) <= (size_t)RETAIL_OBJ_SIZE(1136)
+     && sizeof(DriveCameraMover) <= (size_t)RETAIL_OBJ_SIZE(1008)) ? 1 : -1];
 
 static CameraMover* track_car_mover_new(void* mem, int32_t viewID,
                                         struct Car* car,
@@ -8768,7 +8844,9 @@ int main(int argc, char** argv)
     c3d_lean_log(logLine);
     C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
     C2D_Prepare();
-    C3D_RenderTarget* top = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8,
+    C3D_RenderTarget* top = C3D_RenderTargetCreate(SCREEN_TOP_TARGET_W,
+                                                   SCREEN_TOP_TARGET_H,
+                                                   GPU_RB_RGBA8,
                                                    GPU_RB_DEPTH24_STENCIL8);
     g_top = top;
     if (!top) {
@@ -8800,7 +8878,7 @@ int main(int argc, char** argv)
     // before the frontend is read -- LOADING is the first thing on screen.
     // LOADING_TRACK is GLOBALB's, and its NFS logo is DYNTEX's.
     static UIRenderer ui;
-    uirender_init(&ui, 400.0f, 240.0f);
+    uirender_init(&ui, SCREEN_TOP_W, SCREEN_TOP_H);
     UIBundle* globalBundle = addBundle(&ui, BUNDLE_GLOBAL);
     loadGlobalCarInfo(globalBundle);
     // InitCarInfo (0x00188d08), next in InitializeEverything: each car
@@ -9241,6 +9319,7 @@ int main(int argc, char** argv)
     gSpeechBeACopArrestFn              = be_a_cop_arrest_speech;
     logPrintf("car loader: pool %s\n", LoadedCarSlotPool ? "up" : "missing");
 
+#ifndef SCREEN_ONE
     // The blurb moves to the bottom screen, so the top screen stops drawing
     // it -- and stops drawing the bar tAnimatedBlurb wipes it out with,
     // which on its own over an empty strip is just a flash of grey. The
@@ -9254,6 +9333,9 @@ int main(int argc, char** argv)
     // stays on the top screen, and the lap block, the splits, the score
     // and Be The Cop's panel go to the bottom one.
     hudsplit_install(&ui);
+#endif
+    // With one screen (screen.h) the blurb scrolls where retail has it and
+    // the whole HUD is retail's, every object where the disc puts it.
 
     // FONT_A is the frontend's body face -- 357 of the disc's 934 text
     // objects use it -- and the panel is its only user here. A bundle
@@ -9561,7 +9643,11 @@ int main(int argc, char** argv)
     // The bottom screen prints the controls itself now, so these are for
     // the log -- and for the console, in the half second before the first
     // frame paints over it.
+#ifdef NFSHP2_R36S
+    logPrintf("D-pad: menu  Cross: select  START: start  Triangle: back\n");
+#else
     logPrintf("D-pad: menu  A: select  START: start  B: back\n");
+#endif
     logPrintf("SELECT: screen viewer, geometry, then track\n");
     logPrintf("In the viewer, B: scrolling-texture demo\n");
     // The marker tools/run_azahar_test.ps1 greps for: past this line the
@@ -9965,6 +10051,9 @@ int main(int argc, char** argv)
             trackview_frame_begun(&g_feView);
             trackview_frame_begun(&g_track);
             trackSelSyncPictures(&ui);
+#ifdef NFSHP2_R36S
+            hudSyncPictures(&ui);
+#endif
             frameprof_begin_draw(syncTick, gpuTick, drawTick);
             lastSync = C3D_FrameCounter(0);
             WaitBufferSwapTime = (int32_t)bGetFixTickerDifference(gpuTick,
@@ -10010,6 +10099,21 @@ int main(int argc, char** argv)
                 uirender_draw_visible(&ui, 1.0f);
             etvDrawText(&ui);
             if (g_track.attached && netstep_on()) drawLockHeld(&ui);
+#ifdef SCREEN_ONE
+            // eDisplayFrame's RenderTrackMap for each player (0x00113c38),
+            // after the HUD's Flailer layers: the minimap where Render put
+            // it, on the one screen, as on the PS2.
+            if (g_track.loaded) {
+                for (int i = 0; i < PLAYER_NUM_SHOWN(); i++) {
+                    player_render_track_map(player_shown(i));
+                }
+                C2D_Flush();
+                trackview_draw_flailer_polys(&g_track, SCREEN_TOP_W,
+                                             SCREEN_TOP_H, 1.0f, 0.0f, 0.0f);
+                C2D_Prepare();
+                C3D_DepthTest(false, GPU_GREATER, GPU_WRITE_COLOR);
+            }
+#endif
             C2D_Flush();
             hangwatch_gpu_stage("the top screen's HUD");
             FRAMEPROF_STAMP(FRAMEPROF_HUD);
@@ -10030,8 +10134,21 @@ int main(int argc, char** argv)
             // View Replay's panel (kReplayNote), whatever the HUD left up.
             bool replayUp = pRaceCoordinator != NULL
                 && pRaceCoordinator->pReplayScreen != NULL;
+#ifdef SCREEN_ONE
+            // One screen: the HUD and the map are all on it, above. What
+            // the bottom screen still says is the port's own -- the
+            // controller setup, the replay's keys, the debug menus -- and
+            // the R36S shows it as a panel over the screen only on those.
+            r36s_bottom_popup(replayUp
+                || (g_flow.screen
+                    && (g_flow.screen->callback == joyconfig_callback
+                        || g_flow.screen->callback == debugmenu_callback
+                        || g_flow.screen->callback == debugmenu_race_callback)));
+            if (false) {
+#else
             if (!racePaused && !replayUp
                 && uirender_draw_visible_bottom(&ui, BOT_W, BOT_H, 1.0f)) {
+#endif
                 // eDisplayFrame's RenderTrackMap for each player, after
                 // the Flailer layers: the minimap, made bigger under the
                 // bottom screen's top band (hudsplit_map_place).

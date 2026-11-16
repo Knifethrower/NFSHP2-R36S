@@ -18,6 +18,7 @@
 #include "geocull.h"
 #include "geosolidunif.h"
 #include "hangwatch.h"
+#include "screen.h"
 
 // --------------------------------------------------------------- the shader
 
@@ -225,6 +226,22 @@ static int              s_numSprites;
 static GeoRenderVertex* s_skins;
 static int              s_numSkinVerts;
 static C3D_Mtx          s_screen;
+
+// A screen's mapping for 2D, as citro2d's: x right to its width and y down to
+// its height. With one screen of any shape (screen.h), the 640x480 sits in
+// the middle of the whole picture, and what's off it is the picture's edges.
+static void screen_ortho(C3D_Mtx* m, float width, float height)
+{
+#ifdef SCREEN_ONE
+    if (width == SCREEN_TOP_W && height == SCREEN_TOP_H) {
+        float ox = SCREEN_OFF_X, oy = SCREEN_OFF_Y;
+
+        Mtx_OrthoTilt(m, -ox, width + ox, height + oy, -oy, 1.0f, -1.0f, true);
+        return;
+    }
+#endif
+    Mtx_OrthoTilt(m, 0.0f, width, height, 0.0f, 1.0f, -1.0f, true);
+}
 // The screen's mapping with a vertex's z as its depth: z row (0, 0, -1,
 // 0), which C3D_DepthMap's default scale of -1 turns back into z.
 static C3D_Mtx          s_spriteScreen;
@@ -306,9 +323,10 @@ bool georender_init(void)
     Mtx_Identity(&s_modelView);
     Mtx_Identity(&s_identity);
 
-    // citro2d's own mapping for the top screen: x right to 400 and y down
-    // to 240, at a depth in the middle of the clip volume.
-    Mtx_OrthoTilt(&s_screen, 0.0f, 400.0f, 240.0f, 0.0f, 1.0f, -1.0f, true);
+    // citro2d's own mapping for the top screen: x right to its width and y
+    // down to its height (screen.h), at a depth in the middle of the clip
+    // volume.
+    screen_ortho(&s_screen, SCREEN_TOP_W, SCREEN_TOP_H);
     s_quads = (GeoRenderVertex*)linearAlloc(GEO_QUAD_RING * 4u
                                             * sizeof(GeoRenderVertex));
     s_numQuads = 0;
@@ -1580,7 +1598,7 @@ bool georender_draw_hud_quad(const GeoRenderVertex v[4], const GeoTexture* gt,
     for (i = 1; i < 6; i++) {
         C3D_TexEnvInit(C3D_GetTexEnv(i));
     }
-    Mtx_OrthoTilt(&screen, 0.0f, width, height, 0.0f, 1.0f, -1.0f, true);
+    screen_ortho(&screen, width, height);
     return draw_screen_quad(v, gt, &screen, GEO_BLEND_ALPHA, false, -1.0f,
                             false, false);
 }
@@ -1600,7 +1618,7 @@ bool georender_draw_hud_quad_w(const GeoRenderVertex v[4],
     // the fourth's place and nothing left in the fourth: it gives
     // M (x w, y w, 0, w), which the divide by w puts at (x, y), and the
     // interpolation is perspective-correct by w.
-    Mtx_OrthoTilt(&screen, 0.0f, width, height, 0.0f, 1.0f, -1.0f, true);
+    screen_ortho(&screen, width, height);
     for (i = 0; i < 4; i++) {
         screen.r[i].z = screen.r[i].w;
         screen.r[i].w = 0.0f;

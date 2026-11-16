@@ -29400,3 +29400,482 @@ you see. Only fix anything you notice that's an actual problem."
   `nfshp2_debug.txt` with `DebugLog 1` if a race still freezes.
 - Next, when the player sends a log: look for "not finite after" lines;
   the part and car name the site to fix with eefpu.h's helpers.
+
+---
+
+## Session 158 (2026-11-06) -- The R36S port, phase 1: it builds and boots
+
+**Goal:** the user's "Can we adapt this for the R36S?", as a 64-bit
+(aarch64) build (their choice over 32-bit armhf). `docs/R36S_PORT.md` is
+the port's plan and state; read it first for R36S work.
+
+- **The approach.** The game's 3DS sources are compiled as they are, with
+  `__3DS__` still defined plus `NFSHP2_R36S`. What they ask of the 3DS comes
+  from `r36s/compat`, which declares the parts of libctru, citro3d and
+  citro2d the port uses and implements them on SDL2, pthreads and GLES 2.
+  The 3DS-only diagnostics and Local Wireless (`r36s/replaced.txt`) have
+  R36S versions in `r36s/platform`.
+- **Built** with `r36s/build.sh`, in Docker (Debian 10, glibc 2.28,
+  aarch64 GCC 8.3, SDL 2.28), using the Burnout 3 port's image until
+  `r36s/Dockerfile` is built. All 329 game files compile. The binary is
+  non-PIE at 0x400000.
+- **Booted** under QEMU (Docker's arm64 emulation, SDL's dummy drivers)
+  through the boot flow's probes to "No game data found": the right stop,
+  with no disc files on this machine.
+- **Shared files changed:**
+  - `main.c`: the world step's rounding goes through `fpctl.h`, the same
+    bits in FPSCR or FPCR; the movers' size check uses `RETAIL_OBJ_SIZE`.
+  - `bmem.c`: on the R36S only, a block of 8 KB or less is doubled, because
+    the image allocates objects by their 32-bit size (`objsize.h`).
+  - `p32.h`/`p32.c`: a checked cast on the R36S.
+  - On the 3DS and the checkers' hosts each of these is the identity. Not
+    rebuilt for the 3DS: devkitPro is not on this machine.
+- **Found:** the game overlays some disc records in place with pointer
+  fields (`esolid.c`'s `eSolid`). On aarch64 their layout is wrong, and the
+  32-bit-only layout checks hide it. This blocks loading: R36S_PORT.md, "What
+  is left", 1.
+- **Next:** the disc records' pointer slots, with the disc's files to run
+  them; then stage 2 of `c3d_gles.c` (drawing).
+
+### Session 158, continued -- one screen, the PS2's layout
+
+The user's "set the hud layout and everything like in the ps2 instead of
+the two 3ds screens". `screen.h` (new): on the R36S the top screen is
+640x480 and `SCREEN_ONE` turns the two-screen changes off.
+- `main.c` doesn't install the HUD split or hide the blurbs, and draws
+  the minimap on the one screen after the HUD, as eDisplayFrame does.
+  The bottom screen is shown (`r36s_bottom_popup`) only on the
+  controller setup, the replay's keys and the debug menus.
+- `trackview.c`'s projection is retail's framing on the R36S
+  (`view_fovy`, `view_aspect`, `target_to_screen`'s `SCREEN_PS2_FRAMING`
+  branch), and `georender.c`'s screen ortho takes `screen.h`'s size.
+- On the 3DS every change is the identity: the same literals through the
+  macros, and `#else` branches holding the old code, which is also what
+  `trackview_cuts_check.py` cuts out on its host.
+- The compat layer's `gpuCmdBufSize` is now large: trackview's room check
+  before each draw read 0 and would have skipped every draw.
+- Builds and boots as before. Nothing is drawn yet (`c3d_gles.c` stage
+  2), so the layout is not seen yet. docs/R36S_PORT.md, "Decisions".
+
+## Session 158, continued -- the disc's files on the R36S build
+
+- **The disc:** the user's ISO is SLES-50731 (SYSTEM.CNF). `NFSHP2/ZDIR.BIN`
+  and `ZZDATA.BIN` copied out of it into `PS2 Files/Full Game/`, then the
+  README's steps: `zdir_extract.py --retail --decompress` (398 entries, 81
+  decompressed), `audio_pack.py` (25 banks), `make_card.py` into the main
+  checkout's `card/` (299 files, 2.89 GB). All of it lives beside the ISO in
+  the main checkout, outside git.
+- **Everything the game points at below 4 GB, for real:**
+  - glibc's malloc could not be held there: under QEMU its brk stops after
+    ~1 MB and it quietly falls back to mmap, above 4 GB.
+  - `r36s/platform/lowheap.c`: the game's malloc family, wrapped at link
+    time, from one NORESERVE region between brk and 4 GB. Boundary tags,
+    128 bins with a bitmap, merging, one lock. `r36s/tests/run.sh`
+    stress-tests it (200,000 random operations with a full walk after each,
+    then four threads): passes under QEMU.
+  - Every thread's stack comes from it, with a 64 KB guard; `main` is
+    wrapped to run on such a thread.
+- **A crash report** (signal, registers, backtrace, on an alternate stack)
+  goes to stderr, which the game sends to `sdmc:/nfshp2_stderr.txt`.
+  `r36s/run_qemu.sh <card>` runs the build headless. `NFSHP2_CRASHTEST=1`
+  checks the report.
+- **First run on the disc's files:** sound, jukebox, the three streamed
+  texture packs (19, 89, 783 textures), then a crash in
+  `fred_make_challenge_cars_available` (fred.c:256): `CarTypeInfo` is 1384
+  bytes on aarch64, 1376 on the disc. As expected, the disc records with
+  pointers; sizes and counts in docs/R36S_PORT.md §1.
+
+## Session 158, continued -- the R36S port is 32-bit (armhf)
+
+- **Decided:** armhf, the 3DS's own word size. The user left the switch to
+  Claude once the 64-bit cost was measured: 91 disc-overlaid structs with
+  pointers or a `bNode`. On armhf the records are the image's layouts, and
+  all 130 32-bit-only layout checks compile (they ran for the first time
+  outside the 3DS here). The aarch64 build is kept (`ARCH=aarch64`).
+- **Build:** `r36s/Dockerfile.armhf` (Debian 10 on amd64, GCC 8 armhf,
+  SDL 2.28.5 built for armv7 + NEON; Debian's CMake 3.13, its pip can't
+  install CMake there). Flags `-mcpu=cortex-a35 -mfpu=neon-fp-armv8
+  -mfloat-abi=hard -marm -funwind-tables`, `_FILE_OFFSET_BITS=64` (32-bit
+  stat/readdir fail with EOVERFLOW on Docker's 64-bit inode numbers: the
+  sound banks and the car list went missing), with wrappers for `fopen64`,
+  `freopen64`, `open64` and `__xstat64`.
+- **Game change:** `mv3.c` uses inline `uqadd8`/`uqsub8` under
+  `NFSHP2_R36S` (GCC 8's arm_acle.h lacks the intrinsics). The 3DS keeps
+  the intrinsics.
+- **Makefile fix:** a clean build linked before gen/'s objects were listed;
+  the link globs them now.
+- **Scripted input:** `NFSHP2_INPUT='300:A*60/90'` (ctru_hid.c).
+- **Result (QEMU, no drawing):** from boot through the language screen, the
+  title and its movie, the main menu, into a Cops On race: track loaded,
+  14 cars, AI, traffic and four cops, 31,805 world frames, no crash. The
+  track view culled to 484 of 506 sections (64,473 triangles) at the start
+  and 86-110 sections later. Not a device measurement.
+- **Found on the way:** Python's `write_text` on this Windows machine
+  writes CRLF; `bmem.c`, `p32.h` and `HANDOFF.md` briefly had CRLF and were
+  put back to LF. Write with `newline=""`.
+- **Next:** drawing (docs/R36S_PORT.md §2).
+
+## Session 158, continued -- the R36S GL layer draws
+
+- **Built:** citro3d and citro2d on GLES 2 (`r36s/compat/src/c3d_gles.c`,
+  `c2d_gles.c`, `c3d_shaders.h`, `r36s_gl.h`): GLSL twins of geosolid,
+  geolit and geofold; a fragment shader generated per combiner
+  configuration (Citra's buffer order); vertices read in place with the
+  PICA's packing; Morton untiling with the first memory row at v = 1;
+  FBO targets (cube faces too); a presenter that letterboxes the top
+  target to 4:3 and pops the bottom one up on the port's own screens.
+- **Bugs found on the way:** the presenter must show the target last
+  linked to a screen (the game links two to the top); a stale `C3D_Tex`
+  copy deleted a recycled GL name, the top screen's colour buffer (names
+  now carry an owner generation); citro2d's draws must apply texenv 0's
+  scale (uirender.c doubles it for GS colours).
+- **Headless drawing:** `NFSHP2_GL=pbuffer` (EGL surfaceless, loaded at run
+  time) in `r36s/Dockerfile.armhf-run` (Debian 12 Mesa). llvmpipe under
+  QEMU loses texture contents drawn or uploaded while work is pending
+  (reproduced standalone); softpipe is right, so it is the reference
+  (`GALLIUM_DRIVER=softpipe NFSHP2_PRESENT=sample`). `NFSHP2_GL_FROM`,
+  `NFSHP2_SHOTS`, `NFSHP2_GLDEBUG`, `NFSHP2_C2DTEST` help.
+- **Seen (softpipe, emulated):** the language screen exactly as the PS2
+  lays it out, and a race frame: Viper, track, mirror, HUD, minimap.
+  ~1,700 3D draws a frame, no GL errors.
+- **Not done:** speed (client arrays every draw; textures held twice),
+  read-back effects, any device run, sound heard, PortMaster package.
+- **Shell note:** this machine's bash halves backslashes inside heredocs,
+  so Python heredocs that write C `\n` escapes break them; use the Edit
+  tool or a file for such text.
+
+## Session 158, continued -- the PortMaster package
+
+- `sh r36s/package.sh` makes `r36s/build/portmaster/nfshp2.zip` (819 KB)
+  and the port folder in PortMaster-New's layout, from
+  `r36s/portmaster/` (NFSHP2.sh, port.json v4, README.md, gameinfo.xml,
+  screenshot.png, gamedata.txt) and `r36s/scripts/make_zip.py`.
+- Followed PortMaster's packaging page and AGENTS.md: the template
+  launcher, `PORT_32BIT=Y`, gptokeyb for the exit, LF only, flat
+  `licenses/`, no SDL2/GLES/libc bundled (none needed: the binary needs
+  SDL2, GLESv2 and glibc 2.17). The binary's runpath is now
+  `$ORIGIN/libs.armhf`.
+- Tested under QEMU with a stand-in control.txt: without data the
+  launcher explains and exits; with the card folder as gamedata the
+  packaged binary boots, loads everything and logs to log.txt.
+- Not done: any device run, the porter field, the other CFWs.
+
+## Session 158, continued -- the launcher without PortMaster
+
+- The user's card didn't list the game: the port's files had never reached
+  it (`ports/` had no NFSHP2.sh or nfshp2/). The card is dArkOSRE without
+  PortMaster (only `tools/Install.PortMaster.sh`), so the launcher would
+  have stopped at `source control.txt` anyway.
+- `NFSHP2.sh` now runs with or without PortMaster, as the user's NFSU and
+  Burnout 3 launchers do: its own path for the port folder, the R36S pad's
+  SDL mapping as a fallback, gptokeyb and `pm_*` only with PortMaster, a
+  check of the 32-bit libraries through the armhf loader, and the reasons
+  it can't start on tty1 as well as in log.txt.
+- The game quits on Select+Start held for a second (`ctru_hid.c`), through
+  aptMainLoop's false and the main loop's own shutdown, with a 5-second
+  backstop.
+- README: installing by hand (Windows' "Extract All" adds a folder level).
+
+## Session 158, continued -- first device run, and the measures for 60 FPS
+
+- First run on the user's R36S (dArkOSRE, 2026-11-07): the 32-bit
+  libraries were all there (Mali-G31 blob r13p0, GLES 3.2, KMSDRM), the
+  race loaded and Select+Start quit cleanly. Two ALSA underruns. The user
+  wants a steady 60 FPS and a frame counter on Select + L3, as the other
+  ports have (theirs is Select + R3: both work here).
+- Added (`r36s/platform/r36s_perf.c`): the frame counter (Select + L3 or
+  R3, `NFSHP2_SHOW_FPS=1`), drawn by c3d_gles.c's presenter; a `perf:`
+  line every 2 s in log.txt (fps, frame and swap times, draws, programs,
+  texture binds, uniforms, targets, uploads, 2D quads a frame);
+  `NFSHP2_PROFILE=1`, a 1 kHz SIGPROF sampler written at exit, read by
+  `r36s/scripts/prof_report.py` (armhf ELF symbols, library samples by
+  mapping).
+- Launcher: `nfshp2.cfg` settings; CPU/GPU/DMC governors at performance
+  while the game runs (as NFSU's launcher), restored on exit; the pad
+  fallback's stick buttons fixed (L3 b14, R3 b15, FN b16, from the NFS
+  ports' device-tree reading; the Burnout 3 mapping had them shifted).
+- Suspects before any device numbers: client-side vertex and index arrays
+  for each of ~1,700 draws a frame (the driver copies them every draw);
+  the six envmap faces and the mirror drawn every frame.
+- The card has the measuring build with `nfshp2.cfg` (meter and profiler
+  on) and `gamedata/nfshp2_config.txt` (`DebugLog 1`); the first run's
+  log is `log-first-run.txt`.
+
+## Session 158, continued -- installing from the .iso on the device
+
+- The user asked for what other PortMaster ports that need a console
+  disc do: install the game's files on the device the first time it
+  runs, behind PortMaster's patcher (its Love2D progress screen).
+  PortMaster-New's launchers (164 use `utils/patcher.txt`; Zoombinis
+  installs from an .iso in gamedata/) set PATCHER_FILE (the port's
+  `tools/patchscript`), PATCHER_GAME, PATCHER_TIME, export controlfolder
+  and ESUDO, and source the patcher; the patcher shows the script's
+  stdout lines and takes "PATCH_FAIL_MSG:<why>" then "Patching process
+  failed!" as a failure. Many patch scripts use the firmware's python3.
+- `r36s/installer/nfshp2_install.py` reads the ISO 9660 image itself
+  (NFSHP2/ZDIR.BIN and ZZDATA.BIN in place, no copy), and writes the set
+  make_card.py copies with the tools' own code (read_names, hot_chunked,
+  build_bank): copies streamed 4 MB at a time (the largest entries are
+  300-350 MB), the 30 TRACKB*.LZC expanded to .BUN (lzdecompress's
+  algorithm, non-overlapping copies as slices), the 25 .SBK built. It
+  writes to NFSHP2.installing and renames at the end (keeping SAVES),
+  resumes after a stop, checks free space, and refuses another disc by
+  its directory's hashes. On this PC: 36 s, and the 299 files are the
+  card's byte for byte.
+- `r36s/installer/patchscript` runs it with python3 into patchlog.txt.
+  The launcher runs it when gamedata/NFSHP2/GLOBAL is missing and
+  gamedata/ has an .iso: through PortMaster's patcher, or without
+  PortMaster as a `dialog` gauge on tty1 (plain text without dialog).
+  package.sh puts the installer, the five tools it imports and
+  zdir_names_retail.txt in the port's tools/.
+
+## Session 158, continued -- the D-pad and left stick swap
+
+- The user asked for a combo, like the frame counter's, that swaps the
+  D-pad and the left stick, for PortMaster devices with no stick. Select
+  + L1 (every such device has both; L3 and R3 they don't): swapped, the
+  D-pad is the Circle Pad at full tilt (156, up positive) and the stick
+  past half tilt is the D-pad (let go under 30%). The combo's L1 is kept
+  from the game until it's let go, so it doesn't look back or call a
+  roadblock; Select reaches the game as before. A note says which
+  steers ("D-PAD STEERS" / "STICK STEERS") for two seconds at the top of
+  the screen, drawn with the frame counter (r36s_toast; the font gained
+  A C D E I K R T). NFSHP2_DPAD_STICK=1 in nfshp2.cfg starts swapped.
+  Scripted input and the desktop keyboard are never swapped.
+- Unswapped, the D-pad's Left and Right already steer in a race (joyhid's
+  kFixed), so on a stickless device the swap changes Up and Down most:
+  swapped they're the stick's, and the HUD and the cop's shift down go
+  to the stick.
+- `r36s/tests/hid_swap_test.sh` drives ctru_hid.c through SDL's virtual
+  game controller in the armhf build image: all checks pass, started
+  either way. Not tried on a device; the note not seen drawn.
+- Select + R1 also shows and hides the frame counter (devices with no
+  stick buttons); that R1 is kept from the game while held, as the
+  swap's L1 is. hid_swap_test checks it.
+
+## Session 158, continued -- device run 1: where the frame goes
+
+- The user installed from the ISO on the R36S: 8 min 31 s (the texts
+  now say about 10 minutes). Then a race with the measuring build: 10 to
+  22 FPS, median frame 59.7 ms, p90 99.2, 641 to 1,929 draws a frame.
+- frame = 18.8 ms + 42 us a draw (r2 0.93). The world is 2.4 ms; the draw
+  stages are the rest (envmap 13, models 9 to 31, cars 6, mirror 6,
+  submit 14). Game thread: the Mali driver 50%, libc 19%, game and layer
+  30%. Each draw hands the driver client-side vertex and index arrays.
+- The menus lock at 12.9 ms with vsync: a 77.4 Hz panel, to confirm.
+- The New 3DS build is 30 FPS (20 at its worst), not 60, per Sessions
+  120 to 128.
+- `docs/R36S_OPTIMISATION_BACKLOG.md` has the evidence and the pending
+  items with their estimated savings; the run's logs are in
+  `r36s/build/device/run1/`. Nothing of it is built yet.
+
+## Session 158, continued -- backlog item 1: the meshes in GPU buffers
+
+- `r36s/compat/src/c3d_buffers.c`: a baked mesh's vertices and indices in
+  GL buffers, made at the first draw that uses them (on the GL thread),
+  made again after `georender_refresh`, and dropped when `linearFree`
+  frees the block (the names are deleted at the next frame's start).
+  `geobake.c` calls `r36s_mesh_static` and `r36s_mesh_changed` under
+  NFSHP2_R36S. `setup_vertices` asks `r36sgl_vertex_source` per buffer,
+  and `C3D_DrawElements` asks `r36sgl_index_source`. The indices come from
+  the block only when it is the draw's one buffer, so a posed copy (ring
+  vertices, a mesh's indices) stays on client arrays. citro2d, the
+  presenter and the meter bind no buffer first.
+- NFSHP2_VBO: 1 by default, 0 for client arrays as before, 2 also checks
+  every block's memory against its upload each frame.
+- Emulated (softpipe, track 42): about 95% of the race's draws come from
+  the buffers, verify mode found nothing, and frames 24 and 30 are
+  pixel-identical with VBO=2 and VBO=0. Not measured on the device.
+- Device run 2 (same race as run 1; logs in r36s/build/device/run2/):
+  42.4 -> 39.4 us a draw, median frame 59.7 -> 58.4 ms. The estimate
+  (-10 to -18 ms) was wrong: the copies were about 6% of the game thread
+  (one libc routine 3.6% -> 0.9%), and the Mali blob's own ~28 us a draw
+  (plus ~11 us in the swap) is the wall. The dense vegetation runs at
+  ~9 fps with ~2,400 draws (view ~1,400, envmap ~800, mirror ~450). The
+  backlog has the corrected estimates and a new item 12 (instancing).
+
+## Session 158, continued -- grouped draws, the GL thread (2026-11-08)
+
+- The user: "way more optimisation before testing", target 30 FPS.
+- NFSHP2_DRAWSTATS=N (c3d_gles.c) counts how a frame's draws could
+  merge. On track 11 (emulated), about 1,400 of 2,000 draws are opaque,
+  depth-writing geosolid draws of a mesh repeated with the same state.
+- Item 12 (NFSHP2_INSTANCE): those are held and drawn as instanced draws
+  of kVsGeoSolidInst, about 2,077 -> 1,210 GL draws a frame. Order is
+  kept by flushing the held draws before anything order-dependent; the
+  backlog lists what.
+- Item 4 (NFSHP2_GLTHREAD): glthread.c records the layer's GL calls and
+  plays them on a thread that holds the context. glthread.h redirects
+  gl* to rgl_* in c3d_gles.c, c2d_gles.c and c3d_buffers.c. Calls that
+  return a value borrow the context (rgl_direct_begin/end).
+- Also: cached attribute pointers; the context is asked for as ES 3.0;
+  the display's modes are logged; NFSHP2_HZ picks a refresh rate; the
+  perf line has the GL thread's busy time and the game thread's wait.
+- A bug I made and found: the fixed-state snapshot copied zeros after a
+  text substitution. Every image comparison was redone after the fix.
+- Emulated (softpipe):
+  - Track 42 with everything off is pixel-identical to the saved
+    baseline.
+  - Track 11's race frames with grouping on and off differ only in
+    rounding: 2.5% of pixels, by 1 level at most.
+  - With the GL thread on, an AI car and its smoke are in another place,
+    because the frame timing differs and the world steps by real time.
+    The rendering is otherwise the same.
+- The trade-offs, items 8 and 9, are built as options off by default:
+  NFSHP2_ENVMAP_FACES and NFSHP2_MIRROR_EVERY (trackview.c). The user
+  hasn't chosen them.
+- Not run on a device. The card has this build, with the meter and the
+  profiler on.
+
+## Session 158, continued -- device run 3, the dips
+
+- Run 3 (track 44, 7 AI, no cops; logs in r36s/build/device/run3/): median
+  27.7 FPS, 36.2 ms, p90 45.3 ms; the user: "pretty good, but still some
+  dips". The panel has one mode, 640x480 at 77 Hz, so no 60 Hz. The GL
+  thread bounds the frame, about 19 ms up to the swap and 17 in it.
+- Two kinds of dip: single-frame spikes of 100-440 ms in the cars and
+  mirror stages (suspected: shaders compiled mid-race), and slow seconds
+  with 7-8 cars in view and smoke, where the swap grows.
+- Built, each with an off switch: the program cache
+  (nfshp2_programs.bin), group sorting, depth discarded on leaving a
+  target, a cheaper try_hold, thread CPU times and hitch lines in the log.
+  The backlog has the detail. Emulated only; the first run after
+  installing still compiles.
+
+## Session 158, continued -- run 4 was killed: the flipbook texture leak
+
+- Run 4 (track 31, logs in r36s/build/device/run4/) ended with status 137
+  about 380 s after launch; nothing logged says who killed it.
+- NFSHP2_GL_NODRAW=1 skips the draws on the GL thread, so an emulated soak
+  reaches tens of thousands of frames. It showed about 41 KB a frame, in a
+  straight line: follow_flipbooks copies a never-bound C3D_Tex over t->tex,
+  and the bind made a new GL texture each flip, losing the old name. In the
+  code since the first build.
+- Fixed: GL textures by pixel memory (c3d_gles.c, NFSHP2_TEXSHARE). Soak
+  after: flat at about 310 MB, 0 uploads a frame.
+- Also: a safety swapfile as the sibling launchers have, glTexSubImage2D for
+  re-uploads, limits on the GL thread's queue, a memory: log line, the
+  kernel's log after an abnormal exit.
+- Run 4's hitch lines confirm shader compiles (73-135 ms each); the swap's
+  CPU is 0.4 ms, so it's a wait. Not yet run on the device.
+
+## Session 158, continued -- the car steering itself after a dArkOS reinstall
+
+- The user reinstalled dArkOS (dArkOSRE, 'R36S-V12 2023-08-18 Panel 4'), and
+  the car then steered right on its own. Run 5 (track 36, logs in
+  r36s/build/device/run5/): steer was seldom 0 in the race and nearly always
+  one way (65536 less a small amount, or 59144, about full lock); runs 1-4
+  sat mostly at 0. The game's code hadn't changed. Suspected: a stick that
+  no longer reads centre at rest, past the 7.6% dead zone but under the
+  menus' 61%. Not proven: the log had no raw stick values.
+- ctru_hid.c now measures the sticks' rest over 12 quiet reads when the pad
+  opens, and reads from there, with full tilt still full; the dead zone is
+  10.7%, scaled from its edge. NFSHP2_STICK_CAL=0 goes back. The log has the
+  pad's name, GUID and mapping, and a pad: line every 2 s (raw sticks, rest,
+  Circle Pad, keys), so the next run shows the real cause.
+- hid_swap_test covers a stick resting at 9000. Not run on the device.
+- Run 5 also shows `swapfile on: 1`: swap works from the exFAT card.
+
+## Session 158, continued -- run 6: the GPU, and live quality presets
+
+- Run 6 (track 11, logs in r36s/build/device/run6/): no crash, RSS flat at
+  275 MB, steering balanced (the rest measured was 0,0, so run 5's cause
+  isn't confirmed). The user's 16 FPS is the GPU: the swap blocks for up to
+  44 ms at 0.4 ms of CPU. The backlog has the fit: most likely the main
+  view's fill (the R36S fills 3.2 times the 3DS's pixels) and the envmap's
+  draws.
+- Select + R2 (NFSHP2_QUALITY) cycles FULL, FAST (envmap one face a frame,
+  mirror every second frame) and FASTEST (also the top target drawn at 75%
+  in its corner and stretched; NFSHP2_RENDER_SCALE). They change the picture,
+  so 0 stays the default until the user chooses.
+- The memory line now has the GPU's load and clock, the temperature and the
+  preset.
+
+## Session 158, continued -- one build on the RG34XX with Knulli too
+
+- The user: it "has to work on both systems with the same build". Knulli's
+  system image (read with 7-Zip) has the 32-bit side: `/lib32`, `/usr/lib32`
+  with SDL 2.32.8, libmali, libstdc++, libasound; `/lib/ld-linux-armhf.so.3`.
+  SDL's backends there are mali, x11 and dummy, not KMSDRM.
+- Run-time changes, none by device: the mali backend is fullscreen like
+  KMSDRM; the launcher adds lib32 to LD_LIBRARY_PATH when it exists; the
+  GPU's load file is found by name.
+- A bug it exposed: hid_init gave SDL the whole SDL_GAMECONTROLLERCONFIG as
+  one mapping, so a second line would corrupt the first pad's buttons. Now
+  line by line; hid_swap_test covers it (HID_TEST_MAPS).
+- Batocera's sh generator passes the pad's mapping, by position (its `a` is
+  EAST, its `b` SOUTH). The launcher adds the H700 pad's mapping only if
+  nothing did.
+- Not run on the RG34XX. Unknown until it is: the 32-bit SDL's mali backend
+  with the GL thread, sound through 32-bit ALSA, swap on its card. The Mali
+  driver there is another build, so the program cache's file names its
+  version and compiles again if it differs.
+
+## Session 158, continued -- every PortMaster system, the screen's shape, the gauge face
+
+- The user: the build must work on all PortMaster systems. Read PortMaster's
+  own files (control.txt, device_info.txt, funcs.txt, the mod_ files,
+  hm_ports.py). A port is listed only where DEVICE_CAPABILITIES has armhf, so
+  x86 and firmwares or chips without 32-bit can't run it; port.json no longer
+  has reqs 640x480, which hid it from every other screen.
+- Run-time changes: fullscreen on any backend (SDL_WINDOW_FULLSCREEN_DESKTOP
+  off KMSDRM and mali); the GL thread only on KMSDRM and mali, and off when the
+  driver won't move the context (NFSHP2_GLTHREAD=2 tries it elsewhere); exit 75
+  and a message when there is no window; the 32-bit loader looked for in six
+  places; PortMaster's pm_show_error and pm_message where there is no console;
+  the Love patcher only when its runtime is there; a swapfile that won't go on
+  is removed and .noswapfile remembers; $ESUDO through PortMaster; a shell with
+  no >(...).
+- Build: -march=armv7ve with NEON and VFPv4 (CPU=a35 for the old flags). The
+  A35 build had 253 ARMv8-only instructions in functions with 2% of the device's
+  CPU samples; an ARMv7 chip would have stopped on them. Objects don't depend
+  on the flags, so a changed CPU needs build.sh -B. Fragment shaders take
+  HIGHP only where GL_FRAGMENT_PRECISION_HIGH is defined.
+- The picture fits the screen: the 640x480 sits in the middle of a picture as
+  wide or tall as the screen (screen.h, SCREEN_FULL_W/H), the target is the
+  screen's own pixels, the race's scissor and 3D view open out to the sides, the
+  HUD objects and minimap go to the edges they were at (uirender.c hud_anchor,
+  each by its own centre: not yet looked at on 3:2 or square screens, and a
+  gauge's pieces could split). NFSHP2_ASPECT=0 keeps the bars.
+  NFSHP2_RENDER_SCALE takes 0.25 to 1 (also 25 to 100, and a comma).
+- The speedometer's face: the dial, the tach face and the box behind the speed
+  digits are per-car textures in HUDTEX.BIN, a streamed pack that is not one of
+  uirender's bundles, so they never drew (older frames show it too).
+  hudSyncPictures in main.c decodes the pack's loaded records as the track
+  select's pictures are and overrides them. Seen in an emulated frame only.
+- Emulated only: ARMv7 CPU runs drew no frame (the control proves an ARMv8
+  instruction stops there), launcher cases, swap cases, shapes of 4:3, 16:9,
+  3:2 and square. docs/R36S_SUBMISSION.md has the PortMaster state, the test
+  matrix (one row filled) and the pull request and Discord drafts.
+- Corrected the same day, after the user said the game runs far better than the
+  submission said: the "about 26 fps, down to 15" in the submission drafts was
+  run 6's one scene (track 11, 7 AI, dense scenery), not the port's speed, and
+  is gone; no current figure is recorded, the user's own are to go in the
+  Discord post. docs/R36S_PORT.md's status table said the port was not run on a
+  device and quoted run 1's 10 to 22 FPS; it now says what is true. The input
+  combos are now Select + L1 (or L3, R3) for the frame counter and Select + R1
+  for the D-pad and stick swap (the code was changed; earlier entries here say
+  the other way round).
+
+
+## Session 159 (2026-11-09) -- Top gear engine sound fix and R36S port consolidation
+
+- **Top gear audio bug:** When reaching top gear (e.g. 5th gear on Car 35 Vauxhall VX220),
+  the engine sound pinned at maximum speed (ratio 440) ahead of time and refused to drop
+  even under hard braking.
+- **Root cause:** In playerenginesound_update_to_red_line_rpm (enginesound.c), the shift
+  point lookup was written as dt->ShiftUpRPM[gear + 1]. Disassembly of retail PS2 ELF
+  SLES_507.31 at 0x002108dc (lwc1 , 0x50()) revealed that 0x50 was the base of
+  the shift table passed to CalculateShiftPoints, matching SetDesiredGear's lookup
+  (0x18bd80) of dt->ShiftUpRPM[CurrentGear]. Because drivetrain.h declared ShiftUpRPM
+  at offset 0x4c, the original decompilation added + 1 (0x50 - 0x4c = 4 bytes).
+  In top gear (gear == NumGears + 1), reading [gear + 1] accessed uninitialized memory
+  (0.0f), causing red < shift to fail and ee_div(red, 0.0f) to yield FLT_MAX.
+  CurrentRPM smoothed to FLT_MAX and pinned ratio to 440. Braking could not recover
+  while in top gear because r was continuously recalculated as FLT_MAX.
+- **Fix:** Corrected index to dt->ShiftUpRPM[gear] in enginesound.c; guarded against
+  shift <= 0.0f; clamped r >= 0.0f; clamped ratio to [0, 440] in
+  playerenginesound_update; initialized all unused entries of ShiftUpRPM to ei->MaxRPM
+  and ShiftDownRPM to 0.0f in drivetrain.c.
+- **R36S / PortMaster build:** Rebuilt nfshp2.armhf, packaged via package.sh, and
+  verified with clean LF line endings.

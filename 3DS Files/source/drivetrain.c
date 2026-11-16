@@ -80,6 +80,13 @@ void drivetrain_calculate_shift_points(const DriveTrainInfo *dti,
 
     last = dti->NumGears + 1;
 
+    for (i = 0; i < 9; i++) {
+        if (i < FIRST_GEAR || i >= last)
+            up[i] = ei->MaxRPM;
+        if (i <= FIRST_GEAR || i > last)
+            down[i] = 0.0f;
+    }
+
     for (i = FIRST_GEAR; i < last; i++) {
         float ratio = dti->GearRatios[i];
         float next  = dti->GearRatios[i + 1];

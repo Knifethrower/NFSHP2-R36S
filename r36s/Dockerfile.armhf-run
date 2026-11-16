@@ -1,0 +1,19 @@
+# A Debian 12 armhf image for headless test runs of the armhf build under
+# QEMU (run_qemu.sh): the game's runtime libraries, SDL 2.28 from the build
+# image, and Mesa's software GLES (llvmpipe), which EGL's surfaceless
+# platform drives without a GPU, so the GL layer draws and frames can be
+# saved (NFSHP2_GL=pbuffer). Not what ships: the binary itself is linked
+# against the build image's glibc 2.28.
+#
+#   docker build -t nfshp2-r36s-run-armhf -f r36s/Dockerfile.armhf-run r36s
+FROM nfshp2-r36s-build-armhf AS build
+FROM --platform=linux/arm/v7 debian:12-slim
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libegl1 libgles2 libegl-mesa0 libgl1-mesa-dri libasound2 libdrm2 \
+        libgbm1 libudev1 python3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /opt/r36s /opt/r36s
+COPY --from=build /usr/bin/arm-linux-gnueabihf-addr2line /usr/local/bin/addr2line-x86
+WORKDIR /card

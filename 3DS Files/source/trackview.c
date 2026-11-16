@@ -1,5 +1,9 @@
 #include "trackview.h"
 
+#ifdef NFSHP2_R36S
+#include "r36s_platform.h"
+#endif
+
 #include <malloc.h>
 #include <math.h>
 #include <stdio.h>
@@ -47,6 +51,7 @@
 #include "trackroute.h"
 #include "weatherman.h"
 #include "worldobject.h"
+#include "screen.h"
 
 // The track's files, named from its number as the game names them from
 // RaceParameters.TrackNumber (retail 0x0031a898, the demo's 0x00312520).
@@ -2307,8 +2312,20 @@ static void setup_view(void)
     eRenderTarget* rt = eGetRenderTarget(1);
     eRenderTarget* rvm = eGetRenderTarget(7);
 
+#ifdef SCREEN_ONE
+    // The frame's 512x448 is the 640x480 frame; a screen of another shape
+    // has that much more of it either way (screen.h), at the same scale.
+    // The focal length stays ScreenWidth's (CalculateH), so the view and the
+    // game's cull both open out to the sides and the picture stays the size
+    // it was.
+    MainDraw0Context->ScissorW =
+        (int32_t)((float)ScreenWidth * SCREEN_FULL_W / SCREEN_TOP_W + 0.5f) & ~1;
+    MainDraw0Context->ScissorH =
+        (int32_t)((float)ScreenHeight * SCREEN_FULL_H / SCREEN_TOP_H + 0.5f) & ~1;
+#else
     MainDraw0Context->ScissorW = ScreenWidth;
     MainDraw0Context->ScissorH = ScreenHeight;
+#endif
     rt->AspectRatioX   = 1.0f;
     rt->AspectRatioY   = 1.08f;
     rt->AspectRatio2DX = 0.8f;
@@ -2818,10 +2835,56 @@ static void draw_deferred(TrackView* v, bool alpha)
 static void target_to_screen(float x, float y, int targetW, int targetH,
                              float aspX, float aspY, float* sx, float* sy)
 {
+#ifdef SCREEN_PS2_FRAMING
+    // Retail's framing (view_fovy): the target stretched over the screen,
+    // as the TV showed the frame, so a target pixel scales on each axis. The
+    // target is the whole picture, around the 640x480 (screen.h).
+    (void)aspX;
+    (void)aspY;
+    *sx = SCREEN_TOP_W * 0.5f
+        + (x - (float)(targetW >> 1)) * SCREEN_FULL_W / (float)targetW;
+    *sy = SCREEN_TOP_H * 0.5f
+        + (y - (float)(targetH >> 1)) * SCREEN_FULL_H / (float)targetH;
+#else
     float k = 400.0f / (float)targetW;
 
     *sx = 200.0f + (x - (float)(targetW >> 1)) * k / aspX;
     *sy = 120.0f + (y - (float)(targetH >> 1)) * k / aspY;
+#endif
+}
+
+// The view's projection on the top screen. The 3DS keeps the cull's width
+// across its 400 pixels and crops the height to 5:3. With retail's framing
+// (screen.h) the height is retail's as well: its projection puts y at
+// H AspectRatioY y / z in the target's pixels, so the half-height at unit
+// depth is half the scissor's height over H AspectRatioY, and the frame
+// goes on a 4:3 screen as the PS2's did on a TV.
+static float view_tany(const eView* view, float tanx)
+{
+#ifdef SCREEN_PS2_FRAMING
+    const eRenderTarget* rt = view->pRenderTarget0;
+    (void)tanx;
+    return (float)rt->ScissorH * 0.5f / (view->H * rt->AspectRatioY);
+#else
+    (void)view;
+    return tanx * 240.0f / 400.0f;
+#endif
+}
+
+static float view_fovy(const eView* view, float tanx)
+{
+    return 2.0f * atanf(view_tany(view, tanx));
+}
+
+static float view_aspect(const eView* view, float tanx)
+{
+#ifdef SCREEN_PS2_FRAMING
+    return tanx / view_tany(view, tanx);
+#else
+    (void)view;
+    (void)tanx;
+    return 400.0f / 240.0f;
+#endif
 }
 
 // The table Render takes a Flailer poly's z into (0x002c9e70), 29 of 32
@@ -2910,6 +2973,11 @@ static void epoly_screen(ePoly* p, const eRenderTarget* rt,
         if (p->ApplyAspectRatio) {
             x *= rt->AspectRatio2DX;
             y *= rt->AspectRatio2DY;
+#ifdef SCREEN_ONE
+            // Those are the 512x448's, in the middle of a bigger scissor.
+            if (rt->ScissorW > ScreenWidth) x += (float)((rt->ScissorW - ScreenWidth) >> 1);
+            if (rt->ScissorH > ScreenHeight) y += (float)((rt->ScissorH - ScreenHeight) >> 1);
+#endif
         } else if (halfW < x) {
             x += -0.5f;
         }
@@ -3047,6 +3115,28 @@ void trackview_draw_flailer_polys(TrackView* v, float width, float height,
     int   order[TRACKVIEW_FLAILER_POLYS];
     float sx = width / 640.0f, sy = height / 480.0f;
     int   n = s_numFlailer, i, j, k;
+
+#ifdef SCREEN_ONE
+    // The minimap goes out to the edge it's at on a wider or taller screen,
+    // as the HUD's objects do (uirender.c's hud_anchor), and all of it
+    // together: its middle says which.
+    if (width == SCREEN_TOP_W && height == SCREEN_TOP_H && n > 0) {
+        float mx = 0.0f, my = 0.0f;
+
+        for (i = 0; i < n; i++) {
+            for (k = 0; k < 4; k++) {
+                mx += s_flailer[i].poly.Vertices[k].x * 0.25f;
+                my += s_flailer[i].poly.Vertices[k].y * 0.25f;
+            }
+        }
+        mx /= (float)n;
+        my /= (float)n;
+        if (mx < 256.0f) dx -= SCREEN_OFF_X;
+        else if (mx > 384.0f) dx += SCREEN_OFF_X;
+        if (my < 192.0f) dy -= SCREEN_OFF_Y;
+        else if (my > 288.0f) dy += SCREEN_OFF_Y;
+    }
+#endif
 
     v->flailerPolys  = 0;
     v->flailerFailed = s_flailerDropped;
@@ -3618,6 +3708,24 @@ bool trackview_envmap_init(void)
 // views drawn into the sphere map. A face whose view is not active keeps
 // what it last drew, as retail's target does, and is not folded; one that
 // has never drawn is cleared to its target's grey.
+#ifdef NFSHP2_R36S
+// The R36S's two speed options that change the picture, the user's to
+// choose (docs/R36S_OPTIMISATION_BACKLOG.md, items 8 and 9). Unset, the
+// game draws as retail does.
+//   NFSHP2_ENVMAP_FACES=N  N of the envmap's six faces redrawn a frame, in
+//                          turn (1, 2, 3 or 6); the others keep their last
+//                          picture, so the cars' reflections lag
+//   NFSHP2_MIRROR_EVERY=N  the mirror redrawn every Nth frame (1 to 4),
+//                          shown as last drawn in between
+// Without them, the preset says (r36s_quality: Select + R2).
+static int r36s_option(const char* name, int fallback, int lo, int hi)
+{
+    const char* e = getenv(name);
+    int n = e != NULL && e[0] != '\0' ? atoi(e) : fallback;
+    return n < lo ? lo : n > hi ? hi : n;
+}
+#endif
+
 void trackview_draw_envmap(TrackView* v)
 {
     static const char* const kFace[6] = {
@@ -3642,6 +3750,10 @@ void trackview_draw_envmap(TrackView* v)
     capture_offscreen(true);
     georender_set_light(0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
     georender_set_fog(NULL, 0);
+#ifdef NFSHP2_R36S
+    static int s_envNext;
+    int        envPer = r36s_option("NFSHP2_ENVMAP_FACES", r36s_quality() >= 1 ? 1 : 6, 1, 6);
+#endif
     for (i = 0; i < 6; i++) {
         eView*         view = EnvMapViews[i];
         eRenderTarget* rt;
@@ -3651,6 +3763,13 @@ void trackview_draw_envmap(TrackView* v)
         if (view == NULL || view->pCamera == NULL) {
             continue;
         }
+#ifdef NFSHP2_R36S
+        // Not this face's turn: it keeps what it drew, and isn't folded.
+        if (envPer < 6 && (i - s_envNext + 6) % 6 >= envPer
+            && georender_envmap_face_done(EnvMapCubeFace[i])) {
+            continue;
+        }
+#endif
         rt    = view->pRenderTarget0;
         face  = EnvMapCubeFace[i];
         grey  = rt->BackgroundColour & 0xffu;
@@ -3690,6 +3809,9 @@ void trackview_draw_envmap(TrackView* v)
         views |= 1u << i;
         hangwatch_gpu_stage(kFace[i]);
     }
+#ifdef NFSHP2_R36S
+    s_envNext = (s_envNext + envPer) % 6;
+#endif
     s_envFace = false;
     s_draw    = NULL;
     hangwatch_mark("the envmap's fold begun");
@@ -3841,6 +3963,20 @@ void trackview_draw_mirror(TrackView* v)
     if (gpuCmdBufSize - gpuCmdBufOffset < CMDBUF_GUARD_WORDS) {
         return;
     }
+#ifdef NFSHP2_R36S
+    {
+        // NFSHP2_MIRROR_EVERY (above trackview_draw_envmap): between its
+        // redraws the mirror shows what it last drew.
+        static unsigned s_mirrorFrame;
+        static bool     s_mirrorHas;
+        int             every = r36s_option("NFSHP2_MIRROR_EVERY", r36s_quality() >= 1 ? 2 : 1, 1, 4);
+        if (every > 1 && s_mirrorHas && s_mirrorFrame++ % (unsigned)every != 0) {
+            v->mirrorDrawn = georender_mirror_texture() != NULL;
+            return;
+        }
+        s_mirrorHas = true;
+    }
+#endif
     // The GS's 0xAABBGGRR, with 0x80 for an alpha of one.
     bg    = rt->BackgroundColour;
     a     = (bg >> 24) * 2u;
@@ -4302,8 +4438,13 @@ static void display_rvms(TrackView* v)
     gt.uvScale[1] = 1.0f;
     memset(q, 0, sizeof q);
     for (i = 0; i < 4; i++) {
-        q[i].pos[0] = kX[i] * (400.0f / 512.0f);
-        q[i].pos[1] = kY[i] * (240.0f / 448.0f);
+        // In the 512x448, so in the 640x480: at the top of the picture, in
+        // its middle, whatever the screen's shape.
+        q[i].pos[0] = kX[i] * (SCREEN_TOP_W / 512.0f);
+        q[i].pos[1] = kY[i] * (SCREEN_TOP_H / 448.0f);
+#ifdef SCREEN_ONE
+        q[i].pos[1] -= SCREEN_OFF_Y;
+#endif
         q[i].st[0]  = kS[i];
         q[i].st[1]  = kT[i];
         memset(q[i].colour, 0x80, 4);
@@ -4326,13 +4467,15 @@ void trackview_draw(TrackView* v)
         begin_frame(v);
     }
     v->frameBegun = false;
+    SCREEN_WORLD_FRAME();
 
     // The top screen's width is the cull's: the cull's half-width at unit
     // depth is half the scissor over H, and the height follows from 5:3.
+    // With retail's framing (screen.h) the height is retail's too.
     tanx = (float)view->pRenderTarget0->ScissorW * 0.5f / view->H;
-    fovy = 2.0f * atanf(tanx * 240.0f / 400.0f);
-    Mtx_PerspTilt(&s_proj, fovy, 400.0f / 240.0f, view->NearZ, view->FarZ,
-                  false);
+    fovy = view_fovy(view, tanx);
+    Mtx_PerspTilt(&s_proj, fovy, view_aspect(view, tanx), view->NearZ,
+                  view->FarZ, false);
     // Prelit: the vertex colour and nothing else.
     georender_set_light(0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
 
@@ -4624,9 +4767,9 @@ bool trackview_draw_frontend(TrackView* v, void (*render)(void*),
 
     // The race's projection; see trackview_draw.
     tanx = (float)view->pRenderTarget0->ScissorW * 0.5f / view->H;
-    fovy = 2.0f * atanf(tanx * 240.0f / 400.0f);
-    Mtx_PerspTilt(&s_proj, fovy, 400.0f / 240.0f, view->NearZ, view->FarZ,
-                  false);
+    fovy = view_fovy(view, tanx);
+    Mtx_PerspTilt(&s_proj, fovy, view_aspect(view, tanx), view->NearZ,
+                  view->FarZ, false);
     georender_set_light(0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
 
     // The seams the race's view sets too, and lets go of when it is freed.

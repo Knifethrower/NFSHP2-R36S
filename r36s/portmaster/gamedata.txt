@@ -1,0 +1,6 @@
+Put the disc image (.iso) of your own PAL PS2 disc (SLES-50731) in this
+folder. The first launch installs the game from it into NFSHP2/, and the
+.iso can be deleted afterwards. Or copy the NFSHP2 folder made on a
+computer by the source repository's tools/make_card.py here, so that
+gamedata/NFSHP2/GLOBAL exists. See README.md. Saves and the game's logs
+are kept here too.

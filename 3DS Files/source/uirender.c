@@ -14,14 +14,14 @@
 #include "hudtach.h"
 #include "joyhid.h"
 #include "replaybar.h"
+#include "screen.h"
 
 // RenderHelpCharacter (retail 0x00141dd8) hashes this name and calls
 // FindFont.
 #define HELP_FONT_HASH 0xb85de386u   // bStringHash("BUTTONSOUT")
 
 // The 30-byte table at retail 0x002f09c0: help character 0x80+i draws this
-// glyph of BUTTONSOUT. BUTTONSOUT has only 'a' to 'o', so 0x8e and up find
-// no glyph and draw nothing, and 0x92 is not a help character at all.
+// glyph of BUTTONSOUT. Character 0x92 is an apostrophe, outside this mapping.
 static const uint8_t kHelpGlyph[UIR_HELP_COUNT] = {
     'a', 'b', 'd', 'e', 'f', 'g', 'i', 'j', 'h', 'k',
     'n', 'o', 'l', 'm', '3', 'w', 'p', 'v', 0x92, 'u',
@@ -206,6 +206,7 @@ BUIScreen* uirender_screen_at(UIRenderer* r, uint32_t index, BUI** outUI)
 // Texture cache
 // ---------------------------------------------------------------------------
 
+#ifndef NFSHP2_R36S
 // The replay bar's PS2 buttons drawn as the 3DS keys the replay hears
 // (replaybar.h), from the help line's sheet.
 static void retouch_replay_bar(void* ctx, uint8_t* rgba, uint32_t w,
@@ -214,10 +215,11 @@ static void retouch_replay_bar(void* ctx, uint8_t* rgba, uint32_t w,
     (void)ctx;
     (void)replaybar_retouch(rgba, w, h, buttons3ds_bin, buttons3ds_bin_size);
 }
+#endif
 
 // Decodes and uploads on first use. A miss is cached as an invalid entry so a
 // screen full of one missing hash does not rescan every bundle every frame.
-// The replay bar's texture is retouched on the way (retouch_replay_bar).
+// The 3DS retouches the replay bar to match its buttons.
 static int find_texture(UIRenderer* r, uint32_t hash)
 {
     int index = -1;
@@ -244,8 +246,12 @@ static int find_texture(UIRenderer* r, uint32_t hash)
             TexInfo ti;
             if (!texpack_find(&tp, hash, &ti)) continue;
             if (!texpack_upload_retouched(&tp, &ti, 0, &slot->tex,
+#ifdef NFSHP2_R36S
+                                          NULL,
+#else
                                           hash == REPLAYBAR_TEX_HASH
                                               ? retouch_replay_bar : NULL,
+#endif
                                           NULL))
                 continue;
             slot->w     = ti.width;
@@ -508,6 +514,14 @@ void uirender_override_texture(UIRenderer* r, uint32_t hash, C3D_Tex* tex,
     r->textures[idx].overrideFill = tex && fill;
 }
 
+// Whether the bundles themselves have the texture, as against one drawn in
+// their place by uirender_override_texture.
+bool uirender_bundles_have_texture(UIRenderer* r, uint32_t hash)
+{
+    int idx = find_texture(r, hash);
+    return idx >= 0 && r->textures[idx].valid;
+}
+
 void uirender_forget_texture(UIRenderer* r, uint32_t hash)
 {
     for (int i = 0; i < r->numTextures; i++) {
@@ -692,6 +706,19 @@ static void draw_bitmap_clipped(UIRenderer* r, const BUIObject* o,
     float dy = v->originY + oy * v->scaleY;
     float dw = w * v->scaleX;
     float dh = h * v->scaleY;
+#ifdef SCREEN_ONE
+    // An object over the whole 640x480 is a fade or a backdrop: it covers the
+    // whole picture (screen.h), or the sides would stay as they were.
+    if (!t->override && dx <= 0.5f && dy <= 0.5f && dx + dw >= SCREEN_TOP_W - 0.5f
+        && dy + dh >= SCREEN_TOP_H - 0.5f) {
+        float fx = SCREEN_OFF_X, fy = SCREEN_OFF_Y;
+
+        dx -= fx;
+        dy -= fy;
+        dw += 2.0f * fx;
+        dh += 2.0f * fy;
+    }
+#endif
     // A filling override covers the whole target. An object wider than the
     // target loses some of its sides on the way -- the 640x480 space is
     // square pixels on a 4:3 TV, so w / h is the shape the PS2 showed -- but
@@ -1680,6 +1707,38 @@ static bool poly_clip_box(UIRenderer* r, const BUI* ui,
     return false;
 }
 
+#ifdef SCREEN_ONE
+// On a screen wider or taller than 4:3 (screen.h), the race HUD belongs at
+// its edges, as it was at the 4:3 frame's, and the 3D view is behind it. The
+// one-player HUD's objects (hudsplit.h's screen) go out with the side of the
+// frame they're on, each whole; what's around the middle stays there. Every
+// other screen, the menus' and the pause's, keeps its layout, centred.
+#define UIR_HUD_SCREEN 0xf1f1f8e5u
+
+static void hud_anchor(const UIRenderer* r, const BUIScreen* screen,
+                       const BUIObject* o, UIView* v)
+{
+    float ox = SCREEN_OFF_X, oy = SCREEN_OFF_Y;
+    float cx = o->x, cy = o->y;
+
+    if (screen->nameHash != UIR_HUD_SCREEN || (ox <= 0.0f && oy <= 0.0f)) return;
+    if (o->type == BUI_TYPE_BITMAP) {
+        int32_t tw, th;
+
+        if (uirender_texture_size((UIRenderer*)r, o->textureHash, &tw, &th)) {
+            cx += 0.5f * (float)tw * o->scaleX;
+            cy += 0.5f * (float)th * o->scaleY;
+        }
+    }
+    if (cx < 256.0f) v->originX -= ox;
+    else if (cx > 384.0f) v->originX += ox;
+    if (cy < 192.0f) v->originY -= oy;
+    else if (cy > 288.0f) v->originY += oy;
+}
+#else
+#define hud_anchor(r, screen, o, v) ((void)0)
+#endif
+
 // One object of `layer`, if it is visible there and placed on `target`
 // (UIR_TARGET_*), moved by its placement.
 static void draw_object(UIRenderer* r, BUI* ui, const BUIScreen* screen,
@@ -1696,6 +1755,7 @@ static void draw_object(UIRenderer* r, BUI* ui, const BUIScreen* screen,
     const UIPlacement* p = placed ? placement_of(r, screen, &o) : NULL;
     if ((p ? p->target : UIR_TARGET_TOP) != target) return;
     UIView ov = *v;
+    hud_anchor(r, screen, &o, &ov);
     if (p) {
         ov.originX += p->dx * v->scaleX;
         ov.originY += p->dy * v->scaleY;
@@ -1785,6 +1845,7 @@ static void draw_strips(UIRenderer* r, int layer, float alpha, int target)
             screen_placed(r, screen) ? placement_of(r, screen, &c->o) : NULL;
         if ((p ? p->target : UIR_TARGET_TOP) != target) continue;
         UIView v = screen_view(r, screen, alpha * c->alpha);
+        hud_anchor(r, screen, &c->o, &v);
         if (p) {
             v.originX += p->dx * v.scaleX;
             v.originY += p->dy * v.scaleY;
@@ -1808,6 +1869,7 @@ static void draw_strips(UIRenderer* r, int layer, float alpha, int target)
             screen_placed(r, screen) ? placement_of(r, screen, &o) : NULL;
         if ((p ? p->target : UIR_TARGET_TOP) != target) continue;
         UIView v = screen_view(r, screen, alpha);
+        hud_anchor(r, screen, &o, &v);
         if (p) {
             v.originX += p->dx * v.scaleX;
             v.originY += p->dy * v.scaleY;

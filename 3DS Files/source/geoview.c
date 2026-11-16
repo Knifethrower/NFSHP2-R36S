@@ -10,6 +10,16 @@
 
 #include "emath.h"
 #include "gamedata.h"
+#include "screen.h"
+
+// The car's shape as on a 4:3 screen, whatever the screen's (screen.h): the
+// same view, with the extra width to the sides.
+#ifdef SCREEN_ONE
+#define GEOVIEW_ASPECT (400.0f / 240.0f * (SCREEN_FULL_W / SCREEN_FULL_H) \
+                        / (SCREEN_TOP_W / SCREEN_TOP_H))
+#else
+#define GEOVIEW_ASPECT (400.0f / 240.0f)
+#endif
 
 #define CAR_DIR        "CARS"
 #define CAR_GEOMETRY   "GEOMETRY.BIN"
@@ -566,7 +576,7 @@ void geoview_draw(GeoView* v)
     Mtx_PerspTilt(&proj,
                   (float)v->cam.CurrentKey.FieldOfView * (2.0f * M_PI /
                                                           65536.0f),
-                  400.0f / 240.0f, v->cam.CurrentKey.NearZ,
+                  GEOVIEW_ASPECT, v->cam.CurrentKey.NearZ,
                   v->cam.CurrentKey.FarZ, false);
 
     georender_set_camera(&proj, &view);

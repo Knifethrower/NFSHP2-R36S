@@ -16,6 +16,10 @@ typedef char joyhid_key_check[
      && JOYHID_DDOWN == KEY_DDOWN && JOYHID_R == KEY_R && JOYHID_L == KEY_L
      && JOYHID_X == KEY_X && JOYHID_Y == KEY_Y && JOYHID_ZL == KEY_ZL
      && JOYHID_ZR == KEY_ZR) ? 1 : -1];
+#ifdef NFSHP2_R36S
+typedef char joyhid_stick_key_check[
+    (JOYHID_L3 == KEY_L3 && JOYHID_R3 == KEY_R3) ? 1 : -1];
+#endif
 #endif
 
 // The sixteen buttons, as bits of bytes 2-3 (ScannerConfigTable's shift
@@ -51,8 +55,15 @@ static const struct {
     uint8_t  button;
 } kMap[] = {
     { JOYHID_A,      DS2_CROSS },
+#ifdef NFSHP2_R36S
+    { JOYHID_B,      DS2_TRIANGLE },
+    { JOYHID_X,      DS2_SQUARE },
+    { JOYHID_L3,     DS2_L3 },
+    { JOYHID_R3,     DS2_R3 },
+#else
     { JOYHID_B,      DS2_SQUARE },
     { JOYHID_X,      DS2_TRIANGLE },
+#endif
     { JOYHID_Y,      DS2_CIRCLE },
     { JOYHID_L,      DS2_L1 },
     { JOYHID_R,      DS2_R1 },
@@ -62,7 +73,9 @@ static const struct {
     { JOYHID_DLEFT,  DS2_LEFT },
     { JOYHID_DUP,    DS2_UP },
     { JOYHID_DDOWN,  DS2_DOWN },
+#ifndef NFSHP2_R36S
     { JOYHID_DDOWN,  DS2_R3 },
+#endif
     { JOYHID_START,  DS2_START },
     { JOYHID_SELECT, DS2_SELECT },
 };
@@ -100,17 +113,41 @@ static const uint8_t kActionButton[JOYHID_ACT_COUNT] = {
 static const uint32_t kBindKey[JOYHID_BIND_KEYS] = {
     JOYHID_A, JOYHID_B, JOYHID_X, JOYHID_Y, JOYHID_L, JOYHID_R,
     JOYHID_ZL, JOYHID_ZR, JOYHID_DUP, JOYHID_DDOWN,
+#ifdef NFSHP2_R36S
+    JOYHID_R3, JOYHID_L3,
+#endif
 };
 
 // The map in joyhid.h.
 #define N JOYHID_BIND_NONE
+#ifdef NFSHP2_R36S
+#define DRIVE_BRAKE JOYHID_BIND_X
+#define DRIVE_HORN JOYHID_BIND_Y
+#define DRIVE_CAMERA JOYHID_BIND_B
+#define COP_EBRAKE JOYHID_BIND_R
+#define COP_LOOKBACK JOYHID_BIND_L
+#define COP_SHIFTDOWN JOYHID_BIND_ZL
+#define COP_BOOST JOYHID_BIND_R3
+#define COP_ROADBLOCK N
+#define COP_HELICOPTER N
+#else
+#define DRIVE_BRAKE JOYHID_BIND_B
+#define DRIVE_HORN JOYHID_BIND_X
+#define DRIVE_CAMERA JOYHID_BIND_Y
+#define COP_EBRAKE N
+#define COP_LOOKBACK N
+#define COP_SHIFTDOWN JOYHID_BIND_DDOWN
+#define COP_BOOST JOYHID_BIND_ZL
+#define COP_ROADBLOCK JOYHID_BIND_L
+#define COP_HELICOPTER JOYHID_BIND_R
+#endif
 #define DEFAULTS {                                      \
     .racer = {                                          \
         [JOYHID_ACT_THROTTLE]   = JOYHID_BIND_A,        \
-        [JOYHID_ACT_BRAKE]      = JOYHID_BIND_B,        \
+        [JOYHID_ACT_BRAKE]      = DRIVE_BRAKE,          \
         [JOYHID_ACT_EBRAKE]     = JOYHID_BIND_R,        \
-        [JOYHID_ACT_HORN]       = JOYHID_BIND_X,        \
-        [JOYHID_ACT_CAMERA]     = JOYHID_BIND_Y,        \
+        [JOYHID_ACT_HORN]       = DRIVE_HORN,           \
+        [JOYHID_ACT_CAMERA]     = DRIVE_CAMERA,         \
         [JOYHID_ACT_LOOKBACK]   = JOYHID_BIND_L,        \
         [JOYHID_ACT_SHIFTUP]    = JOYHID_BIND_ZR,       \
         [JOYHID_ACT_SHIFTDOWN]  = JOYHID_BIND_ZL,       \
@@ -121,17 +158,17 @@ static const uint32_t kBindKey[JOYHID_BIND_KEYS] = {
     },                                                  \
     .cop = {                                            \
         [JOYHID_ACT_THROTTLE]   = JOYHID_BIND_A,        \
-        [JOYHID_ACT_BRAKE]      = JOYHID_BIND_B,        \
-        [JOYHID_ACT_EBRAKE]     = N,                    \
-        [JOYHID_ACT_HORN]       = JOYHID_BIND_X,        \
-        [JOYHID_ACT_CAMERA]     = JOYHID_BIND_Y,        \
-        [JOYHID_ACT_LOOKBACK]   = N,                    \
+        [JOYHID_ACT_BRAKE]      = DRIVE_BRAKE,          \
+        [JOYHID_ACT_EBRAKE]     = COP_EBRAKE,           \
+        [JOYHID_ACT_HORN]       = DRIVE_HORN,           \
+        [JOYHID_ACT_CAMERA]     = DRIVE_CAMERA,         \
+        [JOYHID_ACT_LOOKBACK]   = COP_LOOKBACK,         \
         [JOYHID_ACT_SHIFTUP]    = JOYHID_BIND_ZR,       \
-        [JOYHID_ACT_SHIFTDOWN]  = JOYHID_BIND_DDOWN,    \
+        [JOYHID_ACT_SHIFTDOWN]  = COP_SHIFTDOWN,        \
         [JOYHID_ACT_HUD]        = JOYHID_BIND_DUP,      \
-        [JOYHID_ACT_BOOST]      = JOYHID_BIND_ZL,       \
-        [JOYHID_ACT_ROADBLOCK]  = JOYHID_BIND_L,        \
-        [JOYHID_ACT_HELICOPTER] = JOYHID_BIND_R,        \
+        [JOYHID_ACT_BOOST]      = COP_BOOST,            \
+        [JOYHID_ACT_ROADBLOCK]  = COP_ROADBLOCK,        \
+        [JOYHID_ACT_HELICOPTER] = COP_HELICOPTER,       \
     },                                                  \
 }
 static const JoyHidBindings kDefaults = DEFAULTS;
@@ -240,6 +277,7 @@ int32_t joyhid_key_bind(uint32_t key)
 }
 
 // `keys` with keys `a` and `b` read as each other.
+#ifndef NFSHP2_R36S
 static uint32_t swapKeys(uint32_t keys, uint32_t a, uint32_t b)
 {
     uint32_t ab = keys & (a | b);
@@ -251,6 +289,7 @@ static uint32_t swapKeys(uint32_t keys, uint32_t a, uint32_t b)
         keys |= a;
     return keys;
 }
+#endif
 
 // -JOYHID_STICK_FULL .. +JOYHID_STICK_FULL onto 0 .. 255, 128 the centre.
 static uint8_t axis(int32_t v)
@@ -344,8 +383,10 @@ void joyhid_build(const JoyHidState *s, uint8_t buf[32])
         // The frontend's: X reads as B (Square, as the menus' own X is)
         // and B as X (Triangle, the menus' back), so car select's orbit
         // view is X's and Y stays Circle, the help.
+#ifndef NFSHP2_R36S
         if (s->race == JOYHID_LAYOUT_FE)
             keys = swapKeys(keys, JOYHID_B, JOYHID_X);
+#endif
         for (i = 0; i < sizeof(kMap) / sizeof(kMap[0]); i++)
             if (keys & kMap[i].key)
                 down |= 1u << kMap[i].button;
@@ -382,7 +423,9 @@ void joyhid_from_wire(const uint8_t six[6], uint8_t buf[32])
 int32_t joyhid_read(int32_t port, uint8_t *buf)
 {
 #ifdef __3DS__
+#ifndef NFSHP2_R36S
     static JoyHidCop cop;
+#endif
     JoyHidState s;
     circlePosition cp;
     circlePosition cs;
@@ -398,8 +441,12 @@ int32_t joyhid_read(int32_t port, uint8_t *buf)
     s.sy = cs.dy;
     s.race = gJoyHidRaceLayoutFn != NULL ? gJoyHidRaceLayoutFn()
                                          : JOYHID_LAYOUT_MENU;
+#ifdef NFSHP2_R36S
+    s.calls = 0;
+#else
     s.calls = joyhid_cop_calls(&cop, s.keys, s.race == JOYHID_LAYOUT_COP,
                                gJoyHidBindings.cop);
+#endif
     joyhid_build(&s, buf);
     return 1;
 #else

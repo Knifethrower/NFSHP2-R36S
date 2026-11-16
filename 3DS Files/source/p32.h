@@ -38,6 +38,30 @@ static inline void p32_reset(void)
 {
 }
 
+#elif defined(NFSHP2_R36S)
+
+// The R36S's aarch64 build keeps everything the game points at below 4 GB
+// (a non-PIE executable, r36s/platform/lowheap.c's heap, stacks from it), so
+// a slot holds the address as on the 3DS, and a pointer that would not
+// fit is a bug in that arrangement, stopped where it happens.
+void p32_too_high(const void *p);
+
+static inline uint32_t p32_of(const void *p)
+{
+    if ((uintptr_t)p > 0xffffffffu)
+        p32_too_high(p);
+    return (uint32_t)(uintptr_t)p;
+}
+
+static inline void *p32_ptr(uint32_t h)
+{
+    return (void *)(uintptr_t)h;
+}
+
+static inline void p32_reset(void)
+{
+}
+
 #else
 
 // The handle for `p`, registering it the first time it is seen. NULL is 0.

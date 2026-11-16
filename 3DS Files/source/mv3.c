@@ -837,7 +837,22 @@ void mv3_to_rgba(const Mv3Codec* m, uint8_t* dst, int flip)
 
 // Clamp a byte at a time, as ARMv6's UQADD8 and UQSUB8 do: each byte of a
 // and b summed, or differenced, and held to 0..255.
-#if defined(__ARM_FEATURE_SIMD32)
+#if defined(__ARM_FEATURE_SIMD32) && defined(NFSHP2_R36S)
+// The R36S's armhf compiler, GCC 8, has the instructions but not yet
+// arm_acle.h's intrinsics for them (GCC 10). The same two instructions.
+static inline uint32_t sat_add8(uint32_t a, uint32_t b)
+{
+    uint32_t r;
+    __asm__("uqadd8 %0, %1, %2" : "=r"(r) : "r"(a), "r"(b));
+    return r;
+}
+static inline uint32_t sat_sub8(uint32_t a, uint32_t b)
+{
+    uint32_t r;
+    __asm__("uqsub8 %0, %1, %2" : "=r"(r) : "r"(a), "r"(b));
+    return r;
+}
+#elif defined(__ARM_FEATURE_SIMD32)
 #include <arm_acle.h>
 static inline uint32_t sat_add8(uint32_t a, uint32_t b) { return __uqadd8(a, b); }
 static inline uint32_t sat_sub8(uint32_t a, uint32_t b) { return __uqsub8(a, b); }
