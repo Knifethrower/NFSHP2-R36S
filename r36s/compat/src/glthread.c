@@ -76,7 +76,7 @@ enum {
     OP_TexParameteri, OP_Uniform1f, OP_Uniform1i, OP_Uniform2f, OP_Uniform4f, OP_Uniform4fv,
     OP_UseProgram, OP_VertexAttribPointer, OP_Viewport, OP_DrawElementsInstanced,
     OP_DrawArraysInstanced, OP_VertexAttribDivisor, OP_FreeBlob, OP_InvalidateFramebuffer,
-    OP_TexSubImage2D,
+    OP_TexSubImage2D, OP_ProbeBegin, OP_ProbeEnd,
 };
 
 static bool            s_on;           // recording for the thread
@@ -117,6 +117,58 @@ static FnGetProgramBinary      p_getProgramBinary;
 static FnProgramBinary         p_programBinary;
 static FnProgramParameteri     p_programParameteri;
 static FnInvalidateFramebuffer p_invalidateFramebuffer;
+
+// GLES 3's occlusion queries (rgl_occlusion): the sun's probe, one query
+// to a block of the rect around it. The thread begins a query, which first
+// takes the result its last use left if the GPU has finished with it, and
+// keeps the answers in a mask for the game thread to read.
+typedef void (GL_APIENTRY* FnGenQueries)(GLsizei, GLuint*);
+typedef void (GL_APIENTRY* FnBeginQuery)(GLenum, GLuint);
+typedef void (GL_APIENTRY* FnEndQuery)(GLenum);
+typedef void (GL_APIENTRY* FnGetQueryObjectuiv)(GLuint, GLenum, GLuint*);
+static FnGenQueries        p_genQueries;
+static FnBeginQuery        p_beginQuery;
+static FnEndQuery          p_endQuery;
+static FnGetQueryObjectuiv p_getQueryObjectuiv;
+#define PROBE_ANY_SAMPLES_PASSED 0x8C2F
+#define PROBE_RESULT             0x8866
+#define PROBE_RESULT_AVAILABLE   0x8867
+static GLuint   s_probeQ[RGL_PROBES];
+static unsigned s_probeLive;                  // queries ended, their result not yet taken
+static unsigned s_probeMask = (1u << RGL_PROBES) - 1u;   // blocks with sky: all, until told
+static bool     s_probeMade;
+static unsigned s_probeCur;
+
+// On the thread that has the context.
+static void probe_begin_now(unsigned i)
+{
+    if (i >= RGL_PROBES) return;
+    if (!s_probeMade) {
+        p_genQueries(RGL_PROBES, s_probeQ);
+        s_probeMade = true;
+    }
+    if (s_probeLive & (1u << i)) {
+        GLuint ready = 0;
+
+        p_getQueryObjectuiv(s_probeQ[i], PROBE_RESULT_AVAILABLE, &ready);
+        if (ready) {
+            GLuint any = 0;
+
+            p_getQueryObjectuiv(s_probeQ[i], PROBE_RESULT, &any);
+            if (any) __atomic_fetch_or(&s_probeMask, 1u << i, __ATOMIC_RELAXED);
+            else     __atomic_fetch_and(&s_probeMask, ~(1u << i), __ATOMIC_RELAXED);
+        }
+    }
+    p_beginQuery(PROBE_ANY_SAMPLES_PASSED, s_probeQ[i]);
+    s_probeLive &= ~(1u << i);
+    s_probeCur = i;
+}
+
+static void probe_end_now(void)
+{
+    p_endQuery(PROBE_ANY_SAMPLES_PASSED);
+    s_probeLive |= 1u << s_probeCur;
+}
 
 // The pools of names the thread makes ahead.
 #define POOL_FILL 64
@@ -599,6 +651,8 @@ static void play(Chunk* c)
         case OP_TexSubImage2D:
             glTexSubImage2D(a[0].u, a[1].i, 0, 0, a[2].i, a[3].i, a[4].u, a[5].u, a[6].p);
             break;
+        case OP_ProbeBegin: probe_begin_now(a[0].u); break;
+        case OP_ProbeEnd: probe_end_now(); break;
         case OP_InvalidateFramebuffer: {
             GLenum list[2] = { a[1].u, a[2].u };
             p_invalidateFramebuffer(a[0].u, 2, list);
@@ -732,6 +786,14 @@ static void* thread_main(void* arg)
 // ----------------------------------------------------- the game's side
 
 bool rgl_threaded(void) { return s_on; }
+
+// The scripted input's DRAW (ctru_hid.c): drawing on from now, in a run
+// that started with nothing drawn.
+void rgl_draw_now(void)
+{
+    s_drawFrom = 0;
+    s_noDraw = false;
+}
 
 void rgl_frame_is(unsigned frame)
 {
@@ -1346,6 +1408,57 @@ void rgl_InvalidateDepth(GLenum target, GLenum depth, GLenum stencil)
     Arg* x = rec0(OP_InvalidateFramebuffer, 3);
     x[0].u = target; x[1].u = depth; x[2].u = stencil;
 }
+
+static void* probe_proc(const char* core, const char* ext, bool useCore)
+{
+    static void* (*eglGet)(const char*);
+    const char* name = useCore ? core : ext;
+    void* p = SDL_GL_GetProcAddress(name);
+
+    if (p == NULL) p = dlsym(RTLD_DEFAULT, name);
+    if (p == NULL) {
+        // Extension calls are not libGLESv2's symbols, but EGL finds them
+        // (a headless run's context isn't SDL's).
+        if (eglGet == NULL) {
+            void* lib = dlopen("libEGL.so.1", RTLD_NOW | RTLD_GLOBAL);
+
+            if (lib == NULL) lib = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
+            if (lib != NULL) eglGet = (void* (*)(const char*))dlsym(lib, "eglGetProcAddress");
+        }
+        if (eglGet != NULL) p = eglGet(name);
+    }
+    return p;
+}
+
+bool rgl_occlusion(bool core)
+{
+    static int resolved = -1;
+
+    if (resolved < 0) {
+        p_genQueries = (FnGenQueries)probe_proc("glGenQueries", "glGenQueriesEXT", core);
+        p_beginQuery = (FnBeginQuery)probe_proc("glBeginQuery", "glBeginQueryEXT", core);
+        p_endQuery = (FnEndQuery)probe_proc("glEndQuery", "glEndQueryEXT", core);
+        p_getQueryObjectuiv = (FnGetQueryObjectuiv)probe_proc("glGetQueryObjectuiv",
+                                                              "glGetQueryObjectuivEXT", core);
+        resolved = p_genQueries && p_beginQuery && p_endQuery && p_getQueryObjectuiv;
+    }
+    return resolved == 1;
+}
+
+void rgl_ProbeBegin(unsigned i)
+{
+    if (!LIVE) { probe_begin_now(i); return; }
+    Arg* x = rec0(OP_ProbeBegin, 1);
+    x[0].u = i;
+}
+
+void rgl_ProbeEnd(void)
+{
+    if (!LIVE) { probe_end_now(); return; }
+    rec0(OP_ProbeEnd, 0);
+}
+
+unsigned rgl_ProbeMask(void) { return __atomic_load_n(&s_probeMask, __ATOMIC_RELAXED); }
 
 void rgl_VertexAttribDivisor(GLuint a, GLuint b)
 {

@@ -27,8 +27,11 @@ for f in NFSHP2.sh port.json README.md gameinfo.xml; do
     cp "$here/portmaster/$f" "$port/$f"
 done
 cp "$here/portmaster/screenshot.jpg" "$port/screenshot.jpg"
+cp "$here/portmaster/cover.jpg" "$port/cover.jpg"
 cp "$repo/LICENSE" "$port/nfshp2/licenses/LICENSE.nfshp2.txt"
 cp "$here/portmaster/gamedata.txt" "$port/nfshp2/gamedata/README.txt"
+# The settings file the launcher reads (ports/nfshp2/nfshp2.cfg on the card).
+cp "$here/portmaster/nfshp2.cfg" "$port/nfshp2/nfshp2.cfg"
 
 # The first run's install from a disc image (installer/): the patch script
 # PortMaster's patcher runs, the installer, and the repository's own tools
@@ -56,4 +59,4 @@ done
 PY=python
 command -v "$PY" >/dev/null 2>&1 || PY=python3
 "$PY" "$here/scripts/make_zip.py" "$port" NFSHP2.sh nfshp2 "$out/nfshp2.zip" \
-    port.json README.md gameinfo.xml screenshot.jpg
+    port.json README.md gameinfo.xml screenshot.jpg cover.jpg

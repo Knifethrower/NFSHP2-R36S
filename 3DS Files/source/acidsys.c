@@ -229,10 +229,16 @@ void afx_update_textures(void)
 
     for (n = EmitterDataList.next; n != &EmitterDataList; n = n->next) {
         AcidEmitterData *d = (AcidEmitterData *)n;
+#ifdef NFSHP2_R36S
+        // ResourceFile can free the old texture pack before post-load fixup.
+        // Resolve the hash against the surviving packs without touching it.
+        d->Texture = GetTextureInfo(d->TextureNameHash, 0, 0);
+#else
         TextureInfo *t = (TextureInfo *)d->Texture;
 
         if (t == NULL || t->NameHash != d->TextureNameHash)
             d->Texture = GetTextureInfo(d->TextureNameHash, 0, 0);
+#endif
     }
 }
 
@@ -884,6 +890,23 @@ static void acid_corner(uint32_t *x, uint32_t *y, float c, float sn,
     *y = (uint32_t)ee_trunc_w(py * 7.0f + fy);
 }
 
+#ifdef NFSHP2_R36S
+int      gAcidThin = 1;
+uint32_t gAcidSprites;
+uint32_t gAcidDrawn;
+float    gAcidAreaAllK;
+float    gAcidAreaDrawnK;
+float    gAcidBucketK[5];
+uint32_t gAcidBucketN[5];
+int      gAcidBigThin = 1;
+uint32_t gAcidBigSeen;
+
+// A sprite is big when its half-size, in the GS's pixels, is this or more:
+// 20 across, where smoke and dust start to cover ground. Sparks and the
+// small stuff cost no fill and stay as they are.
+#define ACID_THIN_MIN_SIZE 10.0f
+#endif
+
 void acid_system_render_effects(AcidEffectSystem *s, struct eView *view)
 {
     uint32_t start = bGetTicker();
@@ -981,6 +1004,9 @@ void acid_system_render_effects(AcidEffectSystem *s, struct eView *view)
             uint32_t a, z, rgba, x[4], y[4], w[20];
             int32_t sx, sy;
             int i;
+#ifdef NFSHP2_R36S
+            int thin = 1;
+#endif
 
             pnext = pn->next;
             pos.x = pa->X;
@@ -1000,6 +1026,36 @@ void acid_system_render_effects(AcidEffectSystem *s, struct eView *view)
                 size = max_size;
             if (!(1.0f < size) || !(vv.z < far_clip))
                 continue;
+#ifdef NFSHP2_R36S
+            gAcidSprites++;
+            gAcidAreaAllK += size * size * 3.5f * 0.001f;
+            {
+                int b = size < 10.0f ? 0 : size < 40.0f ? 1 : size < 100.0f ? 2 : size < 250.0f ? 3 : 4;
+
+                gAcidBucketK[b] += size * size * 3.5f * 0.001f;
+                gAcidBucketN[b]++;
+            }
+            if (view->ID == 1 && size >= ACID_BIG_SIZE) {
+                gAcidBigSeen++;
+            }
+            thin = size < ACID_THIN_MIN_SIZE ? 1 : gAcidThin;
+            if (view->ID == 1 && size >= ACID_BIG_SIZE && gAcidBigThin > thin) {
+                thin = gAcidBigThin;
+            }
+            if (thin > 1) {
+                uint32_t hash = (uint32_t)((uintptr_t)pn >> 5) * 2654435761u;
+
+                // gAcidBigThin is a power of two, and keeps the sprites
+                // whose low bits are 0: those it keeps at 8 it keeps at 4
+                // too, so a cloud that grows or thins loses sprites or
+                // gets them back, but never swaps one for another.
+                if (thin == gAcidBigThin ? ((hash >> 20) & (uint32_t)(thin - 1)) != 0
+                                         : (hash >> 20) % (uint32_t)thin != 0)
+                    continue;
+            }
+            gAcidDrawn++;
+            gAcidAreaDrawnK += size * size * 3.5f * 0.001f;
+#endif
 
             a = (uint16_t)pa->Angle;
             if (a & 1)
@@ -1040,6 +1096,10 @@ void acid_system_render_effects(AcidEffectSystem *s, struct eView *view)
             count++;
 
             hermite_parameter(&col, &cb, t);
+#ifdef NFSHP2_R36S
+            if (thin > 1 && 0.0f < col.w && col.w < 128.0f)
+                col.w = 128.0f * (1.0f - powf(1.0f - col.w * (1.0f / 128.0f), (float)thin));
+#endif
             rgba = acid_byte(col.x) | acid_byte(col.y) << 8
                  | acid_byte(col.z) << 16 | acid_byte(col.w) << 24;
             u0 = (float)(int32_t)(pa->Frame & col_mask) * du;

@@ -193,6 +193,85 @@ static const char* const kStrings[PORTLANG_END - PORTLANG_FIRST][6] = {
       "Salvare le modifiche sulla scheda SD prima della gara?",
       "\xbfGuardar los cambios en la tarjeta SD antes de la carrera?",
       "Spara dina \xe4ndringar p\xe5 SD-kortet f\xf6re loppet?" },
+    // PORTLANG_GRAPHICS_FULL .. PORTLANG_GRAPHICS_BLURB: Display Options'
+    // row for the R36S's speed presets (r36s_quality), whole, as the row's
+    // own text holds 16 characters and a LanguageID's has no such limit
+    { "Graphics: Full", "Graphismes : Compl\xe8te", "Grafik: Voll",
+      "Grafica: Completa", "Gr\xe1" "ficos: Completa", "Grafik: Full" },
+    { "Graphics: Fast", "Graphismes : Rapide", "Grafik: Schnell",
+      "Grafica: Veloce", "Gr\xe1" "ficos: R\xe1pida", "Grafik: Snabb" },
+    { "Graphics: Fastest", "Graphismes : Tr\xe8s rapide",
+      "Grafik: Am schnellsten", "Grafica: Velocissima",
+      "Gr\xe1" "ficos: Muy r\xe1pida", "Grafik: Snabbast" },
+    { "Full draws the game as the PS2 does. Fast redraws the reflections "
+      "and the mirror less often. Fastest also draws the 3D smaller.",
+      "Compl\xe8te dessine le jeu comme la PS2. Rapide redessine moins "
+      "souvent les reflets et le r\xe9troviseur. Tr\xe8s rapide dessine "
+      "aussi la 3D en plus petit.",
+      "Voll zeichnet das Spiel wie die PS2. Schnell zeichnet Spiegelungen "
+      "und R\xfc" "ckspiegel seltener neu. Am schnellsten zeichnet die 3D "
+      "au\xdf" "erdem kleiner.",
+      "Completa disegna il gioco come la PS2. Veloce ridisegna meno spesso "
+      "i riflessi e lo specchietto. Velocissima disegna anche il 3D pi\xf9 "
+      "piccolo.",
+      "Completa dibuja el juego como la PS2. R\xe1pida redibuja con menos "
+      "frecuencia los reflejos y el retrovisor. Muy r\xe1pida dibuja "
+      "adem\xe1s el 3D m\xe1s peque\xf1o.",
+      "Full ritar spelet som PS2. Snabb ritar om reflexerna och backspegeln "
+      "mer s\xe4llan. Snabbast ritar dessutom 3D-grafiken mindre." },
+    // PORTLANG_SMOKE_FULL .. PORTLANG_SMOKE_BLURB: the Smoke row (R36S)
+    { "Smoke: Full", "Fum\xe9" "e : Compl\xe8te", "Rauch: Voll", "Fumo: Completo",
+      "Humo: Completo", "R\xf6" "k: Full" },
+    { "Smoke: Less", "Fum\xe9" "e : Moins", "Rauch: Weniger", "Fumo: Meno",
+      "Humo: Menos", "R\xf6" "k: Mindre" },
+    { "Smoke: Least", "Fum\xe9" "e : Le moins", "Rauch: Am wenigsten",
+      "Fumo: Il meno", "Humo: Lo m\xed" "nimo", "R\xf6" "k: Minst" },
+    { "Full draws every smoke and dust puff, as the PS2 does. Less and Least "
+      "draw fewer of them, and thin a dense cloud: they cost the GPU less.",
+      "Compl\xe8te dessine chaque bouff\xe9" "e de fum\xe9" "e et de poussi\xe8" "re, "
+      "comme la PS2. Moins et Le moins en dessinent moins et all\xe8" "gent un "
+      "nuage dense : elles co\xfbtent moins au GPU.",
+      "Voll zeichnet jede Rauch- und Staubwolke, wie die PS2. Weniger und Am "
+      "wenigsten zeichnen weniger davon und lichten dichte Wolken aus: sie "
+      "kosten die GPU weniger.",
+      "Completo disegna ogni sbuffo di fumo e polvere, come la PS2. Meno e Il "
+      "meno ne disegnano meno e diradano le nubi dense: costano meno alla GPU.",
+      "Completo dibuja cada bocanada de humo y polvo, como la PS2. Menos y Lo "
+      "m\xed" "nimo dibujan menos y aclaran las nubes densas: cuestan menos a la "
+      "GPU.",
+      "Full ritar varje r\xf6" "k- och dammoln, som PS2. Mindre och Minst ritar "
+      "f\xe4" "rre och glesar ut t\xe4" "ta moln: de kostar GPU:n mindre." },
+    // PORTLANG_FACE_STANDARD .. PORTLANG_FACE_BLURB: Options' Controller,
+    // Face buttons (R36S), as the whole row's text
+    { "Face buttons: Standard", "Boutons de face : Standard",
+      "Aktionstasten: Standard", "Tasti azione: Standard",
+      "Botones: Est\xe1" "ndar", "Knappar: Standard" },
+    { "Face buttons: Swap A/B & X/Y", "Boutons de face : Inverser A/B et X/Y",
+      "Aktionstasten: A/B und X/Y tauschen", "Tasti azione: Scambia A/B e X/Y",
+      "Botones: Cambiar A/B y X/Y", "Knappar: Byt A/B och X/Y" },
+    { "Pick how the four face buttons are read. Standard is your device's "
+      "layout; Swap A/B & X/Y exchanges the bottom and right buttons, and the "
+      "left and top ones, for pads whose buttons come out crossed.",
+      "Choisissez comment lire les quatre boutons de face. Standard suit la "
+      "disposition de l'appareil ; Inverser A/B et X/Y \xe9" "change les "
+      "boutons du bas et de droite, puis ceux de gauche et du haut, pour les "
+      "manettes dont les boutons sont crois\xe9" "s.",
+      "Legt fest, wie die vier Aktionstasten gelesen werden. Standard ist die "
+      "Belegung deines Ger\xe4" "ts; A/B und X/Y tauschen vertauscht die "
+      "untere mit der rechten und die linke mit der oberen Taste, f\xfc" "r "
+      "Pads mit vertauschten Tasten.",
+      "Scegli come leggere i quattro tasti azione. Standard \xe8 la "
+      "disposizione del dispositivo; Scambia A/B e X/Y scambia il tasto in "
+      "basso con quello a destra, e quello a sinistra con quello in alto, per "
+      "i controller con i tasti incrociati.",
+      "Elige c\xf3" "mo se leen los cuatro botones. Est\xe1" "ndar es la "
+      "disposici\xf3" "n de tu dispositivo; Cambiar A/B y X/Y intercambia el "
+      "bot\xf3" "n de abajo con el de la derecha, y el de la izquierda con el "
+      "de arriba, para mandos con los botones cruzados.",
+      "V\xe4" "lj hur de fyra knapparna l\xe4" "ses. Standard \xe4" "r enhetens "
+      "layout; Byt A/B och X/Y byter nedre och h\xf6" "gra knappen, samt "
+      "v\xe4" "nstra och \xf6" "vre, f\xf6" "r handkontroller med korsade "
+      "knappar." },
 };
 
 // Retail's memory card messages and the Load/Save screen's help lines,

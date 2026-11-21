@@ -56,6 +56,7 @@
 #include "bchunk.h"
 #include "bchunkload.h"
 #include "beltmover.h"
+#include "bplist.h"
 #include "bganim.h"
 #include "bmath.h"
 #include "bmem.h"
@@ -7790,6 +7791,10 @@ static int flowInput(u32 kDown, u32 kUp, int port)
     // HELP panel with the override's lines or the screen's, or sends it
     // away. While it is coming in or there, the popups, the screen and its
     // menu hear nothing.
+    if (helpmenu_is_active(&g_help) && (kDown & (KEY_Y | KEY_B | KEY_START))) {
+        helpmenu_dismiss(&g_help);
+        return 1;
+    }
     if ((listDown & KEY_Y) && !(g_boot.hasMenu && g_boot.menu.ignoreJoystick)
         && !bpopup_any_active(&g_flow) && takes) {
         helpmenu_toggle(&g_help,
@@ -8103,6 +8108,10 @@ int main(int argc, char** argv)
     // before anything can call bNewSlotPool. Its allocator hook is left at
     // the default, malloc -- i.e. the heap heapcfg.c already sized.
     sinit_run();
+    // The bPNode pool (smokeable, skids, munitions, endgame) started at 32
+    // nodes and grew by 9 each time a race ran out, with a warning and a
+    // new block. Retail's InitializeEverything sets it to 2048 (bplist.h).
+    bplist_init(2048);
     // Retail's list has one more the demo's does not: [99], 0x0024fa60,
     // TheEasterEggs' constructor.
     eastereggs_construct(&TheEasterEggs);
@@ -9843,7 +9852,7 @@ int main(int argc, char** argv)
             // the players' events, below.
             // Options' Controller page has its keys first: X, and every
             // key while it waits for one (joyconfig.h).
-            if (!raceUp) {
+            if (!raceUp && !helpmenu_is_active(&g_help)) {
                 u32 took = joyconfig_input(kDown);
                 if (took) redraw = 1;
                 menuDown &= ~took;
@@ -10144,11 +10153,26 @@ int main(int argc, char** argv)
             // the bottom screen still says is the port's own -- the
             // controller setup, the replay's keys, the debug menus -- and
             // the R36S shows it as a panel over the screen only on those.
-            r36s_bottom_popup(replayUp
-                || (g_flow.screen
-                    && (g_flow.screen->callback == joyconfig_callback
-                        || g_flow.screen->callback == debugmenu_callback
-                        || g_flow.screen->callback == debugmenu_race_callback)));
+            // On the controller page the panel would cover the lower rows,
+            // so it shows as retail's HELP panel does, on the help key, and
+            // while the page waits for a new key, which it names
+            // (joyconfig_panel_wanted). NFSHP2_CONFIG_PANEL=1 keeps it up.
+            {
+                static int cfgKeep = -1;
+                bool       cfgPanel;
+
+                if (cfgKeep < 0) {
+                    const char* e = getenv("NFSHP2_CONFIG_PANEL");
+                    cfgKeep = e != NULL && e[0] == '1';
+                }
+                cfgPanel = g_flow.screen
+                    && g_flow.screen->callback == joyconfig_callback
+                    && (cfgKeep || joyconfig_panel_wanted());
+                r36s_bottom_popup(replayUp || cfgPanel
+                    || (g_flow.screen
+                        && (g_flow.screen->callback == debugmenu_callback
+                            || g_flow.screen->callback == debugmenu_race_callback)));
+            }
             if (false) {
 #else
             if (!racePaused && !replayUp

@@ -109,13 +109,21 @@ void r36s_mesh_static(const void* verts, size_t vbytes, const void* indices, siz
 void r36s_mesh_changed(const void* verts);
 void r36s_mesh_forget(const void* mem);
 
-// The speed presets (Select + R2, or NFSHP2_QUALITY=N), which change the
-// picture: 0 as the game draws it; 1 the reflections one face a frame and
-// the mirror every second frame; 2 also the 3D at 75% of the screen's size.
-// NFSHP2_ENVMAP_FACES, NFSHP2_MIRROR_EVERY and NFSHP2_RENDER_SCALE override
-// a preset's parts.
+// The speed presets (Options' Display Options, Graphics, or NFSHP2_QUALITY=N),
+// which change the picture: 0 as the game draws it; 1 the reflections one
+// face a frame and the mirror every second frame; 2 also the 3D at 75% of
+// the screen's size. NFSHP2_ENVMAP_FACES, NFSHP2_MIRROR_EVERY and
+// NFSHP2_RENDER_SCALE override a preset's parts. r36s_quality_set takes
+// effect at once and is kept in the save folder for the next start.
 int  r36s_quality(void);
-void r36s_quality_next(void);
+void r36s_quality_set(int q);
+// The smoke row: 0 Full, 1 Less, 2 Least (r36s_perf.c).
+int  r36s_smoke(void);
+void r36s_smoke_set(int v);
+// Options' Controller, Face buttons (compat's ctru_hid.c): 0 Standard, 1
+// Swap A/B & X/Y, live and kept in the save folder.
+int  r36s_face_swap(void);
+void r36s_face_swap_set(int on);
 // The top screen's drawn size, percent of its own.
 float r36s_render_scale(void);
 

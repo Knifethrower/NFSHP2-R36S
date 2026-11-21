@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <3ds.h>
 
@@ -39,13 +40,36 @@ static circlePosition s_cpad, s_cstick;
 //   FRAME:KEY*N/P        N such presses, one every P frames
 // with KEY one of A B X Y L R ZL ZR START SELECT UP DOWN LEFT RIGHT.
 // Each press is logged.
+//
+// NFSHP2_INPUT_AT names a screen ("New Main Menu"), and NFSHP2_INPUT_THEN's
+// frames count from the first time the game enters it, where NFSHP2_INPUT's
+// presses stop (so 'A*40/90' gets there however long it takes): a menu that opens
+// after a movie timed by the clock comes at another frame each run under
+// emulation. There two more KEYs: DRAW starts drawing in a run with
+// NFSHP2_GL_DRAWFROM (glthread.c), SHOT saves the next frame (c3d_gles.c's
+// shot_NNNNN.ppm).
 #define SCRIPT_MAX 64
 #define SCRIPT_HOLD 4
-static struct { unsigned frame, count, period; u32 key; const char* name; } s_script[SCRIPT_MAX];
+#define SCRIPT_DRAW 0x40000000u   // markers, never put in the keys held
+#define SCRIPT_SHOT 0x20000000u
+static struct { unsigned frame, count, period; u32 key; const char* name; bool then; } s_script[SCRIPT_MAX];
 static int s_scriptN;
 static unsigned s_frame;
+static unsigned s_atFrame;        // the screen's first frame, + 1; 0 not yet
 
-static void script_parse(void)
+void rgl_draw_now(void);           // glthread.c
+void r36s_shot_next(void);         // c3d_gles.c
+
+void r36s_input_screen(const char* screen)
+{
+    const char* at = getenv("NFSHP2_INPUT_AT");
+    if (s_atFrame == 0 && at != NULL && screen != NULL && strcmp(at, screen) == 0) {
+        s_atFrame = s_frame + 1;
+        printf("input: frame %u, %s entered; NFSHP2_INPUT_THEN counts from here\n", s_frame, screen);
+    }
+}
+
+static void script_parse_one(const char* p, bool then)
 {
     static const struct { const char* name; u32 key; } names[] = {
         { "A", KEY_A }, { "B", KEY_B }, { "X", KEY_X }, { "Y", KEY_Y },
@@ -53,9 +77,8 @@ static void script_parse(void)
         { "L3", KEY_L3 }, { "R3", KEY_R3 },
         { "START", KEY_START }, { "SELECT", KEY_SELECT },
         { "UP", KEY_DUP }, { "DOWN", KEY_DDOWN }, { "LEFT", KEY_DLEFT },
-        { "RIGHT", KEY_DRIGHT },
+        { "RIGHT", KEY_DRIGHT }, { "DRAW", SCRIPT_DRAW }, { "SHOT", SCRIPT_SHOT },
     };
-    const char* p = getenv("NFSHP2_INPUT");
     while (p != NULL && *p != '\0' && s_scriptN < SCRIPT_MAX) {
         char name[16];
         unsigned frame = 0, count = 1, period = 1;
@@ -70,6 +93,7 @@ static void script_parse(void)
                 s_script[s_scriptN].period = period ? period : 1;
                 s_script[s_scriptN].key = names[i].key;
                 s_script[s_scriptN].name = names[i].name;
+                s_script[s_scriptN].then = then;
                 s_scriptN++;
             }
         while (*p != '\0' && *p != ',') p++;
@@ -77,17 +101,35 @@ static void script_parse(void)
     }
 }
 
+static void script_parse(void)
+{
+    script_parse_one(getenv("NFSHP2_INPUT"), false);
+    script_parse_one(getenv("NFSHP2_INPUT_THEN"), true);
+}
+
 static u32 script_keys(void)
 {
     u32 k = 0;
     for (int i = 0; i < s_scriptN; i++) {
         unsigned f = s_frame, start = s_script[i].frame;
+        if (s_script[i].then) {
+            if (s_atFrame == 0) continue;
+            f = s_frame - (s_atFrame - 1);
+        } else if (s_atFrame != 0) {
+            continue;   // NFSHP2_INPUT ends where NFSHP2_INPUT_THEN starts
+        }
         if (f < start) continue;
         unsigned n = (f - start) / s_script[i].period;
         unsigned in = (f - start) % s_script[i].period;
         if (n < s_script[i].count && in < SCRIPT_HOLD) {
-            k |= s_script[i].key;
-            if (in == 0) printf("input: frame %u, %s\n", f, s_script[i].name);
+            u32 key = s_script[i].key;
+            if (in == 0) {
+                printf("input: frame %u, %s%s\n", s_frame, s_script[i].name,
+                       s_script[i].then ? " (then)" : "");
+                if (key == SCRIPT_DRAW) rgl_draw_now();
+                if (key == SCRIPT_SHOT) r36s_shot_next();
+            }
+            if (key != SCRIPT_DRAW && key != SCRIPT_SHOT) k |= key;
         }
     }
     return k;
@@ -135,24 +177,9 @@ static void quit_combo(void)
 // look back, no roadblock). Select reaches it as it would.
 static bool s_eatL;
 static bool s_eatR;
-static bool s_eatZR;
 static bool s_eatL3, s_eatR3;
-
-// Select + R2 changes the speed preset (r36s_perf.c). That R2 is kept from
-// the game until it's let go, so it shifts no gear.
-static void quality_combo(void)
-{
-    static bool was;
-    bool sel = s_pad != NULL && SDL_GameControllerGetButton(s_pad, SDL_CONTROLLER_BUTTON_BACK);
-    bool r2 = s_pad != NULL
-        && SDL_GameControllerGetAxis(s_pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > TRIGGER_ON;
-    if (sel && r2 && !was) {
-        r36s_quality_next();
-        s_eatZR = true;
-    }
-    if (!r2) s_eatZR = false;
-    was = r2;
-}
+// The speed preset is Options' Display Options, Graphics (displayoptions.c);
+// Select + R2 changed it until 2026-11-20.
 
 static void meter_combo(void)
 {
@@ -328,12 +355,125 @@ static u32 stick_dpad(void)
     return held;
 }
 
+// The game's face buttons are by position (hidScanInput's map): SDL's A the
+// bottom one, B the right, X the left, Y the top, as SDL means them. muOS's
+// own pad comes with a mapping by the letters printed on the buttons, and
+// most of its handhelds (Anbernic's) print them Nintendo's way, A on the
+// right and B at the bottom: each face button then did another's job, and
+// the controller page named the wrong ones. That mapping's four face buttons
+// are put back by position; the rest of it stays. The launcher's lines name
+// the pads it knows by their GUID; this covers the muOS devices it doesn't.
+// NFSHP2_FACE_FIX=0 leaves the mapping as muOS gives it.
+static void face_fix(void)
+{
+    static const char kLabel[] = ",a:b2,b:b3,x:b4,y:b5,";
+    static const char kPlace[] = ",a:b3,b:b2,x:b5,y:b4,";
+    const char* off = getenv("NFSHP2_FACE_FIX");
+    const char* name = SDL_GameControllerName(s_pad);
+    char* m;
+    char* at;
+
+    if ((off != NULL && off[0] == '0') || name == NULL || strcmp(name, "muOS-Keys") != 0)
+        return;
+    m = SDL_GameControllerMapping(s_pad);
+    if (m == NULL) return;
+    at = strstr(m, kLabel);
+    if (at != NULL) {
+        memcpy(at, kPlace, sizeof kPlace - 1);
+        if (SDL_GameControllerAddMapping(m) >= 0)
+            printf("input: muOS's pad maps its face buttons by their letters; "
+                   "by position here (NFSHP2_FACE_FIX=0 to keep them)\n");
+    }
+    SDL_free(m);
+}
+
+// Options' Controller, Face buttons: Standard, or Swap A/B & X/Y, for a pad
+// whose buttons still come out crossed (some muOS devices). Swapped, the
+// bottom and right buttons trade jobs and so do the left and top ones, on
+// top of whatever the pad's mapping already is: every control the game
+// reads moves with them, menus and the controller page included, while the
+// letters on screen stay as they are. The choice is kept in the save folder.
+// NFSHP2_SWAP_AB=1 and NFSHP2_SWAP_XY=1 swap each pair whatever the menu
+// says; 0 or unset leave it to the menu. Scripted input and a desktop's
+// keyboard are never swapped.
+#define FACE_SAVE_DIR  "sdmc:/NFSHP2/SAVES"
+#define FACE_SAVE_FILE FACE_SAVE_DIR "/face.txt"
+
+static int s_faceMenu = -1;   // -1 not read yet; 0 Standard, 1 Swap A/B & X/Y
+
+int r36s_face_swap(void)
+{
+    if (s_faceMenu < 0) {
+        char  path[512];
+        FILE* f = fopen(r36s_path(FACE_SAVE_FILE, path, sizeof path), "r");
+        int   v;
+
+        s_faceMenu = 0;
+        if (f != NULL) {
+            if (fscanf(f, "%d", &v) == 1 && (v == 0 || v == 1)) s_faceMenu = v;
+            fclose(f);
+        }
+        if (s_faceMenu) printf("input: face buttons swapped (Options, Controller)\n");
+    }
+    return s_faceMenu;
+}
+
+void r36s_face_swap_set(int on)
+{
+    char  path[512];
+    FILE* f;
+
+    s_faceMenu = on != 0;
+    printf("input: face buttons %s\n", s_faceMenu ? "swapped A/B and X/Y" : "standard");
+    mkdir(r36s_path(FACE_SAVE_DIR, path, sizeof path), 0755);
+    f = fopen(r36s_path(FACE_SAVE_FILE, path, sizeof path), "w");
+    if (f != NULL) {
+        fprintf(f, "%d\n", s_faceMenu);
+        fclose(f);
+    } else {
+        printf("input: the face buttons choice couldn't be saved to %s\n", path);
+    }
+}
+
+static int env_on(const char* name)
+{
+    const char* e = getenv(name);
+    return e != NULL && e[0] == '1';
+}
+
+static SDL_GameControllerButton face_button(SDL_GameControllerButton b)
+{
+    static int envAB = -1, envXY;
+    int        menu = r36s_face_swap();
+    int        ab, xy;
+
+    if (envAB < 0) {
+        envAB = env_on("NFSHP2_SWAP_AB");
+        envXY = env_on("NFSHP2_SWAP_XY");
+        if (envAB || envXY)
+            printf("input: face buttons swapped by%s%s\n", envAB ? " NFSHP2_SWAP_AB=1" : "",
+                   envXY ? " NFSHP2_SWAP_XY=1" : "");
+    }
+    ab = menu || envAB;
+    xy = menu || envXY;
+    if (ab) {
+        if (b == SDL_CONTROLLER_BUTTON_A) return SDL_CONTROLLER_BUTTON_B;
+        if (b == SDL_CONTROLLER_BUTTON_B) return SDL_CONTROLLER_BUTTON_A;
+    }
+    if (xy) {
+        if (b == SDL_CONTROLLER_BUTTON_X) return SDL_CONTROLLER_BUTTON_Y;
+        if (b == SDL_CONTROLLER_BUTTON_Y) return SDL_CONTROLLER_BUTTON_X;
+    }
+    return b;
+}
+
 static void open_pad(void)
 {
     for (int i = 0; i < SDL_NumJoysticks() && s_pad == NULL; i++) {
         if (SDL_IsGameController(i))
             s_pad = SDL_GameControllerOpen(i);
     }
+    if (s_pad != NULL) face_fix();
 }
 
 static void hid_init(void)
@@ -412,7 +552,6 @@ bool r36s_pump_events(void)
     quit_combo();
     meter_combo();
     swap_combo();
-    quality_combo();
     sticks_read();
     return !s_quit;
 }
@@ -471,14 +610,13 @@ void hidScanInput(void)
             { SDL_CONTROLLER_BUTTON_DPAD_RIGHT, KEY_DRIGHT },
         };
         for (size_t i = 0; i < sizeof map / sizeof map[0]; i++)
-            if (SDL_GameControllerGetButton(s_pad, map[i].b)) pad |= map[i].key;
+            if (SDL_GameControllerGetButton(s_pad, face_button(map[i].b))) pad |= map[i].key;
         if (SDL_GameControllerGetAxis(s_pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > TRIGGER_ON)
             pad |= KEY_ZL;
         if (SDL_GameControllerGetAxis(s_pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > TRIGGER_ON)
             pad |= KEY_ZR;
         if (s_eatL) pad &= ~KEY_L;
         if (s_eatR) pad &= ~KEY_R;
-        if (s_eatZR) pad &= ~KEY_ZR;
         if (s_eatL3) pad &= ~KEY_L3;
         if (s_eatR3) pad &= ~KEY_R3;
     }

@@ -127,6 +127,11 @@ typedef struct {
 
 static GLCache g;
 
+// The draws' shader key, kept while nothing it is made of changes
+// (key_get): the combiner's stages and buffer, and the alpha test, mark it
+// stale where they are set.
+static bool s_keyStale = true;
+
 // GL_VERSION, read once at C3D_Init.
 static char s_glVersion[128];
 
@@ -160,6 +165,7 @@ static void tex_env_defaults(void)
 {
     for (int i = 0; i < 6; i++)
         C3D_TexEnvInit(&s.env[i]);
+    s_keyStale = true;
 }
 
 static bool has_ext(const char* name)
@@ -268,6 +274,8 @@ void C3D_DepthTest(bool enable, GPU_TESTFUNC function, GPU_WRITEMASK writemask)
 
 void C3D_AlphaTest(bool enable, GPU_TESTFUNC function, int ref)
 {
+    // The reference is a uniform, not the key's.
+    if (s.alphaTest != enable || s.alphaFunc != function) s_keyStale = true;
     s.alphaTest = enable;
     s.alphaFunc = function;
     s.alphaRef = ref;
@@ -386,9 +394,12 @@ void C3D_SetBufInfo(C3D_BufInfo* info) { if (info != &s.buf) s.buf = *info; }
 
 // --------------------------------------------------------- tex env
 
-C3D_TexEnv* C3D_GetTexEnv(int id) { return &s.env[(id < 0 || id > 5) ? 0 : id]; }
-void C3D_SetTexEnv(int id, C3D_TexEnv* env) { if (id >= 0 && id <= 5) s.env[id] = *env; }
-void C3D_DirtyTexEnv(C3D_TexEnv* env) { (void)env; }
+// These mark the draws' shader key stale (s_keyStale). As citro3d on the
+// 3DS: a stage changes through the pointer C3D_GetTexEnv gives, before the
+// next draw, or is marked with C3D_DirtyTexEnv.
+C3D_TexEnv* C3D_GetTexEnv(int id) { s_keyStale = true; return &s.env[(id < 0 || id > 5) ? 0 : id]; }
+void C3D_SetTexEnv(int id, C3D_TexEnv* env) { s_keyStale = true; if (id >= 0 && id <= 5) s.env[id] = *env; }
+void C3D_DirtyTexEnv(C3D_TexEnv* env) { (void)env; s_keyStale = true; }
 
 // As citro3d's: `mask` is the stages (0-3) whose output goes to the
 // combiner buffer, for the colour, the alpha or both.
@@ -399,6 +410,7 @@ void C3D_TexEnvBufUpdate(int mode, int mask)
     if (mode & C3D_RGB) val = (val & ~(0xFu << 8)) | ((u32)mask << 8);
     if (mode & C3D_Alpha) val = (val & ~(0xFu << 12)) | ((u32)mask << 12);
     s.texEnvBuf = val;
+    s_keyStale = true;
 }
 void C3D_TexEnvBufColor(u32 color) { s.texEnvBufColor = color; }
 
@@ -2227,12 +2239,106 @@ static void key_build(ProgKey* k, int vs)
     k->bufRgb = (u8)((s.texEnvBuf >> 8) & 0xF);
     k->bufAlpha = (u8)((s.texEnvBuf >> 12) & 0xF);
     k->alphaFunc = (u8)(s.alphaTest ? s.alphaFunc : GPU_ALWAYS);
-    for (int u = 0; u < 3; u++) {
-        C3D_Tex* t = s.tex[u];
-        if (t != NULL && src_uses(k, GPU_TEXTURE0 + u))
-            k->texType[u] = tex_mode(t) == GPU_TEX_CUBE_MAP ? 2 : 1;
+    {
+        // The sources the stages read, as src_uses finds them, in one pass.
+        u32 used = 0;
+        for (int i = 0; i < 6; i++)
+            for (int j = 0; j < 3; j++)
+                used |= 1u << ((k->srcRgb[i] >> (4 * j)) & 0xF)
+                      | 1u << ((k->srcAlpha[i] >> (4 * j)) & 0xF);
+        for (int u = 0; u < 3; u++) {
+            C3D_Tex* t = s.tex[u];
+            if (t != NULL && ((used >> (GPU_TEXTURE0 + u)) & 1u))
+                k->texType[u] = tex_mode(t) == GPU_TEX_CUBE_MAP ? 2 : 1;
+        }
     }
     k->vs = (u8)vs;
+}
+
+// key_build's answer, kept until something it reads changes: the stages,
+// the buffer's and the alpha test's (s_keyStale), the bound textures and
+// their kind (2D or cube, which a texture's own setup may change), and the
+// vertex shader. Most draws of a frame come in runs of one material, and
+// were building it twice each (try_hold, then prepare_draw).
+// NFSHP2_KEYCACHE=0 builds it every time; =2 builds it every time too and
+// logs where the kept one differed (and uses the built one).
+static struct {
+    bool           valid;
+    int            vs;
+    const C3D_Tex* tex[3];
+    u32            texParam[3];
+    ProgKey        key;
+} s_kc;
+static int      s_kcMode = -1;
+static unsigned s_kcHits, s_kcBuilds, s_kcWrong;
+
+static void key_get(ProgKey* k, int vs)
+{
+    bool same;
+
+    if (s_kcMode < 0) {
+        const char* e = getenv("NFSHP2_KEYCACHE");
+        s_kcMode = e != NULL && e[0] != '\0' ? atoi(e) : 1;
+        if (s_kcMode < 0 || s_kcMode > 2) s_kcMode = 1;
+        if (s_kcMode != 1) printf("R36S: shader key cache %s\n", s_kcMode ? "checked" : "off");
+    }
+    if (s_kcMode == 0) {
+        key_build(k, vs);
+        return;
+    }
+    same = s_kc.valid && !s_keyStale && s_kc.vs == vs;
+    for (int u = 0; u < 3 && same; u++)
+        same = s_kc.tex[u] == s.tex[u]
+            && (s.tex[u] == NULL || s_kc.texParam[u] == (s.tex[u]->param & 0x70000000u));
+    if (s_kcMode == 2 && (s_kcHits + s_kcBuilds) % 20000 == 19999)
+        printf("R36S: shader key cache: %u kept, %u built, %u stale\n", s_kcHits, s_kcBuilds,
+               s_kcWrong);
+    if (same) {
+        s_kcHits++;
+        *k = s_kc.key;
+        if (s_kcMode == 2) {
+            ProgKey b;
+            key_build(&b, vs);
+            if (memcmp(&b, k, sizeof b) != 0) {
+                if (s_kcWrong++ < 20) printf("R36S: shader key cache: a kept key was stale\n");
+                *k = b;
+                s_kc.key = b;
+            }
+        }
+        return;
+    }
+    s_kcBuilds++;
+    key_build(k, vs);
+    if (s_kcMode == 2) {
+        // key_build's one-pass source mask against src_uses, source by source.
+        for (int u = 0; u < 3; u++) {
+            bool want = s.tex[u] != NULL && src_uses(k, GPU_TEXTURE0 + u);
+            if (want != (k->texType[u] != 0) && s_kcWrong++ < 20)
+                printf("R36S: shader key: texture %d's use differs from src_uses\n", u);
+        }
+    }
+    s_kc.valid = true;
+    s_kc.vs = vs;
+    for (int u = 0; u < 3; u++) {
+        s_kc.tex[u] = s.tex[u];
+        s_kc.texParam[u] = s.tex[u] != NULL ? (s.tex[u]->param & 0x70000000u) : 0;
+    }
+    s_kc.key = *k;
+    s_keyStale = false;
+}
+
+// vs_of's answer for the last shader asked about (its name searched for
+// the twins' names each draw, twice). DVLB_Free forgets it.
+static const DVLE_s* s_vsLast;
+static int           s_vsLastVs = -1;
+
+static int vs_of_cached(const DVLE_s* dvle)
+{
+    if (dvle != s_vsLast) {
+        s_vsLast = dvle;
+        s_vsLastVs = vs_of(dvle);
+    }
+    return s_vsLastVs;
 }
 
 // ------------------------------------------------------------ draws
@@ -2300,9 +2406,9 @@ static Prog* prepare_draw(void)
         s_dbg.noProgram++;
         return NULL;
     }
-    vs = vs_of(s.program->vertexShader->dvle);
+    vs = vs_of_cached(s.program->vertexShader->dvle);
     if (vs < 0) { s_dbg.noTwin++; return NULL; }
-    key_build(&key, vs);
+    key_get(&key, vs);
     if (s_lastProg != NULL && memcmp(&key, &s_lastKey, sizeof key) == 0) {
         p = s_lastProg;
     } else {
@@ -2499,7 +2605,7 @@ static bool try_hold(GPU_Primitive_t primitive, u32 count, GLenum itype, const v
     if (s.program == NULL || s.program->vertexShader == NULL
         || (dvle = s.program->vertexShader->dvle) == NULL)
         return false;
-    vs = vs_of(dvle);
+    vs = vs_of_cached(dvle);
     if (vs != VS_SOLID || s.buf.bufCount != 1 || s.buf.r36s_vaddr[0] == NULL) { s_holdWhy[1]++; return false; }
     fixed_snap(&fx);
     if (!fixed_order_free(&fx)) {
@@ -2510,7 +2616,7 @@ static bool try_hold(GPU_Primitive_t primitive, u32 count, GLenum itype, const v
         return false;
     }
     if (r36sgl_mesh_dirty(s.buf.r36s_vaddr[0])) { s_holdWhy[3]++; return false; }
-    key_build(&key, vs);
+    key_get(&key, vs);
     for (int u = 0; u < 3; u++)
         if (key.texType[u] && (s.tex[u] == NULL || tex_would_change(s.tex[u]))) { s_holdWhy[4]++; return false; }
     if (!target_ready(t)) { s_holdWhy[5]++; return false; }
@@ -2961,10 +3067,11 @@ static GLint  s_presentRect, s_presentUv, s_presentShade, s_presentUvScale;
 // screen.h). Its picture fills the screen, wider or taller than 4:3. Any
 // other frame -- the menus, the loading screens, the movies -- is the PS2's
 // 4:3 frame in the middle of the picture, and the room around it shows that
-// frame's own edges mirrored, at half brightness, as the THUG port's menus
-// do: no bars, and nothing stretched. What the game left in that room (a
-// panel's end that the PS2 hid past the frame's edge, text parked below it)
-// is covered. NFSHP2_FILL=0 shows what's drawn there instead, as before.
+// frame's own edge rows, stretched and dimmed (NFSHP2_FILL unset or "edge"),
+// or its edges mirrored at half brightness ("mirror", as the THUG port's
+// menus do): no bars, and nothing stretched. What the game left in that room
+// (a panel's end that the PS2 hid past the frame's edge, text parked below
+// it) is covered. NFSHP2_FILL=0 shows what's drawn there instead, as before.
 static bool s_worldFrame;
 
 void r36s_screen_world(void)
@@ -2972,21 +3079,28 @@ void r36s_screen_world(void)
     s_worldFrame = true;
 }
 
-static bool fill_sides(void)
+enum { FILL_NONE, FILL_MIRROR, FILL_EDGE };
+
+static int fill_mode(void)
 {
-    static int on = -1;
-    if (on < 0) {
+    static int mode = -1;
+    if (mode < 0) {
         const char* e = getenv("NFSHP2_FILL");
-        on = !(e != NULL && e[0] == '0');
-        printf("R36S: 4:3 frames %s\n", on ? "fill the screen, their edges mirrored"
-                                          : "keep what's drawn around them");
+        mode = e == NULL ? FILL_EDGE
+             : e[0] == '0' ? FILL_NONE
+             : strcmp(e, "mirror") == 0 ? FILL_MIRROR : FILL_EDGE;
+        printf("R36S: 4:3 frames %s\n",
+               mode == FILL_EDGE   ? "fill the screen, their edge rows stretched"
+             : mode == FILL_MIRROR ? "fill the screen, their edges mirrored"
+                                   : "keep what's drawn around them");
     }
-    return on != 0;
+    return mode;
 }
 
 // A part of the picture rectangle r (GL's -1..1), from p0 to p1 of its width
 // (`wide`) or height, showing the picture from u0 over du of that axis (du
-// negative: mirrored), at brightness `shade`.
+// negative: mirrored; zero: the one line at u0 stretched), at brightness
+// `shade`.
 static void present_part(const float r[4], bool wide, float p0, float p1, float u0, float du,
                          float shade)
 {
@@ -3008,6 +3122,132 @@ static C3D_RenderTarget* screen_target(gfxScreen_t screen)
 {
     C3D_RenderTarget* t = (unsigned)screen < 2 ? s_linked[screen] : NULL;
     return t != NULL && t->frameBuf.r36s_fbo != 0 ? t : NULL;
+}
+
+// ------------------------------------------------------------ the sun's sky
+//
+// The PS2 sizes the sun's glare by how much sky shows around it: StuffSun
+// counts the pixels of a 32x32 rect of the last frame's Z that the clear
+// left, which only the sky does (sundraw.h). The 3DS port reads that depth
+// back; GLES can't read depth, so here each of 16 blocks of the rect gets an
+// occlusion query: a rectangle at the far plane, which the depth test passes
+// only where the depth is still the clear's, drawn once the frame's world
+// is. The queries are GLES 3's, or GLES 2's GL_EXT_occlusion_query_boolean;
+// a GPU with neither (Mali-400's Lima, say) shows the sun as before. The GL
+// thread keeps the answers (rgl_ProbeMask), a frame or so late as the PS2's
+// transfer is, and the next StuffSun reads them as Z words: 0 for a block
+// with sky, a far one for one without. Until the first answers every block
+// has sky, as before. NFSHP2_SUNOCC=0 leaves it so; =debug probes the whole
+// screen instead and prints its 4x4 sky map; =ext uses the extension's calls
+// on an ES 3 context too, to test them.
+static GLuint s_probeProg;
+static GLint  s_probeRect;
+static int    s_sunOcc = -1;      // 0 off, 1 on, 2 debug
+
+void r36s_sun_probe(uint32_t* dst, int x, int y, int w, int h, int targetW, int targetH)
+{
+    static const float quad[8] = { 0, 0, 1, 0, 0, 1, 1, 1 };
+    static unsigned calls;
+    C3D_RenderTarget* t = screen_target(GFX_TOP);
+    unsigned mask;
+    GLint tw, th;
+    int bx, by;
+
+    if (s_sunOcc < 0) {
+        const char* e = getenv("NFSHP2_SUNOCC");
+        // "ext": the ES 2 extension's calls, as a GPU without ES 3 would use
+        // (Mesa gives an ES 3 context even to an ES 2 request, so a test run
+        // can't get one, and an ES 3 context doesn't list the extension).
+        bool forced = e != NULL && strcmp(e, "ext") == 0;
+        bool es3 = strstr(s_glVersion, "OpenGL ES 3") != NULL && !forced;
+        // ES 3 has the queries; ES 2 may have them as an extension (not
+        // every GPU does: Mali-400's Lima, for one).
+        bool can = s_gl && (es3 ? rgl_occlusion(true)
+                                : (forced || has_ext("GL_EXT_occlusion_query_boolean"))
+                                  && rgl_occlusion(false));
+        if (!can)
+            printf("R36S: no occlusion queries (%s)\n",
+                   es3 ? "ES 3's calls not found"
+                       : "GL_EXT_occlusion_query_boolean not listed or its calls not found");
+        s_sunOcc = !can ? 0 : e == NULL ? 1 : e[0] == '0' ? 0 : strcmp(e, "debug") == 0 ? 2 : 1;
+        printf("R36S: the sun's sky counted by %s\n",
+               s_sunOcc == 2 ? "occlusion queries over the whole screen (debug)"
+               : s_sunOcc    ? "occlusion queries" : "nothing (it always shows)");
+    }
+    if (!s_sunOcc || w <= 0 || h <= 0 || targetW <= 0 || targetH <= 0) return;
+    calls++;
+
+    // What the last frame's queries found, as Z words.
+    mask = rgl_ProbeMask();
+    if (s_sunOcc == 1 && dst != NULL) {
+        for (int j = 0; j < h; j++)
+            for (int i = 0; i < w; i++)
+                dst[j * w + i] = (mask >> ((j * 4 / h) * 4 + (i * 4 / w))) & 1 ? 0u : 0xffffffu;
+    } else if (s_sunOcc == 2 && calls % 30 == 0) {
+        printf("sun probe: the screen's sky map, top row first\n");
+        for (by = 0; by < 4; by++) {
+            char row[5];
+            for (bx = 0; bx < 4; bx++) row[bx] = (mask >> (by * 4 + bx)) & 1 ? 'S' : '#';
+            row[4] = '\0';
+            printf("sun probe:   %s\n", row);
+        }
+    }
+
+    // This frame's: the world is drawn into the screen's target by now.
+    if (t == NULL || s.target != t || !s.inFrame || t->r36s_depth == 0 || gl_skip()
+        || !target_ready(t))
+        return;
+    if (s_probeProg == 0) {
+        s_probeProg = r36sgl_link(kVsProbe, kFsProbe, "sun probe");
+        if (s_probeProg == 0) {
+            s_sunOcc = 0;
+            return;
+        }
+        s_probeRect = glGetUniformLocation(s_probeProg, "uRect");
+    }
+    if (s_sunOcc == 2) {
+        x = 0;
+        y = 0;
+        w = targetW;
+        h = targetH;
+    }
+    r36sgl_flush2d();
+    r36sgl_flush_held();
+    if (!g.valid) cache_reset();
+    bind_fbo(t->frameBuf.r36s_fbo);
+    target_size(t, &tw, &th);
+    set_viewport(0, 0, tw, th);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_GEQUAL);
+    glDepthMask(GL_FALSE);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    r36sgl_use_program(s_probeProg);
+    r36sgl_client_arrays();
+    r36sgl_attrib_mask(1);
+    r36sgl_attrib_pointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
+    for (by = 0; by < 4; by++) {
+        for (bx = 0; bx < 4; bx++) {
+            // The block's pixels of the rect, from the target's top, in GL's
+            // -1..1 with y up.
+            float px0 = (float)x + (float)w * (float)bx * 0.25f;
+            float py0 = (float)y + (float)h * (float)by * 0.25f;
+            float r[4];
+
+            r[0] = px0 / (float)targetW * 2.0f - 1.0f;
+            r[2] = (float)w * 0.25f / (float)targetW * 2.0f;
+            r[3] = (float)h * 0.25f / (float)targetH * 2.0f;
+            r[1] = 1.0f - (py0 + (float)h * 0.25f) / (float)targetH * 2.0f;
+            glUniform4fv(s_probeRect, 1, r);
+            rgl_ProbeBegin((unsigned)(by * 4 + bx));
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            rgl_ProbeEnd();
+        }
+    }
+    // Everything this changed is behind the cache's back: the next draw
+    // starts from GL's state as the cache's reset has it.
+    g.valid = false;
 }
 
 // The window in GL's terms for a rectangle in a 640x480 frame fitted to
@@ -3123,15 +3363,30 @@ static void present_screens(void)
         {
             float fw = r36s_screen_full_w(), fh = r36s_screen_full_h();
             bool wide = fw > 640.5f, tall = fh > 480.5f;
-            if (!world && (wide || tall) && fill_sides()) {
+            int fill = (!world && (wide || tall)) ? fill_mode() : FILL_NONE;
+            if (fill != FILL_NONE) {
                 // The 4:3 frame's share of the picture, e0 to e1, and the
-                // room each side of it showing the frame mirrored about its
-                // own edge, at half brightness, so it reads as background.
+                // room each side of it: the frame's edge row stretched, or
+                // the frame mirrored about its own edge, at half brightness,
+                // so it reads as background.
                 float e0 = 0.5f - 0.5f * (wide ? 640.0f / fw : 480.0f / fh);
                 float e1 = 1.0f - e0;
-                present_part(r, wide, 0.0f, e0, 2.0f * e0, -e0, 0.5f);
-                present_part(r, wide, e0, e1, e0, e1 - e0, 1.0f);
-                present_part(r, wide, e1, 1.0f, e1, -e0, 0.5f);
+                if (fill == FILL_EDGE) {
+                    // A line two pixels inside the frame, not the edge's own
+                    // pixel, which linear sampling blends with what lies
+                    // outside it.
+                    int pw, ph;
+                    float in;
+                    r36s_screen_pixels(&pw, &ph);
+                    in = 2.0f / (float)(wide ? pw : ph);
+                    present_part(r, wide, 0.0f, e0, e0 + in, 0.0f, 0.5f);
+                    present_part(r, wide, e0, e1, e0, e1 - e0, 1.0f);
+                    present_part(r, wide, e1, 1.0f, e1 - in, 0.0f, 0.5f);
+                } else {
+                    present_part(r, wide, 0.0f, e0, 2.0f * e0, -e0, 0.5f);
+                    present_part(r, wide, e0, e1, e0, e1 - e0, 1.0f);
+                    present_part(r, wide, e1, 1.0f, e1, -e0, 0.5f);
+                }
             } else {
                 present_part(r, wide, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f);
             }
@@ -3307,6 +3562,10 @@ static void present(void)
     draw_meter(ww, wh, meter, toast);
 }
 
+// The scripted input's SHOT (ctru_hid.c): the next frame saved.
+static volatile bool s_shotNext;
+void r36s_shot_next(void) { s_shotNext = true; }
+
 // NFSHP2_SHOTS: "every:N" or "120,600,1800", frames saved to shot_NNNNN.ppm.
 static void maybe_shoot(u32 frame)
 {
@@ -3314,7 +3573,8 @@ static void maybe_shoot(u32 frame)
     static u32 every, list[32];
     static int nList;
     const char* e;
-    bool want = false;
+    bool want = s_shotNext;
+    s_shotNext = false;
     if (!parsed) {
         parsed = 1;
         e = getenv("NFSHP2_SHOTS");
@@ -3476,6 +3736,7 @@ DVLB_s* DVLB_ParseFile(u32* shbinData, u32 shbinSize)
 void DVLB_Free(DVLB_s* dvlb)
 {
     if (dvlb == NULL) return;
+    s_vsLast = NULL;
     for (u32 i = 0; i < dvlb->numDVLE; i++)
         free(dvlb->DVLE[i].uniforms);
     free(dvlb->DVLE);

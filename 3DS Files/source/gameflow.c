@@ -281,6 +281,13 @@ int bgf_change_to_screen(BGameFlow* gf, const char* name, int pushCurrent)
             gf->screen = n;
             screenVisible(gf, n->hash, 1);
             trace(gf, "enter %s %08x", n->name, (unsigned)n->hash);
+#ifdef NFSHP2_R36S
+            {
+                // Scripted input's NFSHP2_INPUT_AT (compat's ctru_hid.c).
+                void r36s_input_screen(const char* screen);
+                r36s_input_screen(n->name);
+            }
+#endif
             // FlailerScreen::Activate (0x0016a858) in its order: build the
             // FlailerMenu, send SCREEN_ACTIVATE, then set the current item
             // and activate the menu. The menu exists before the screen's

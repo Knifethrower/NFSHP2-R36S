@@ -29879,3 +29879,25 @@ the two 3ds screens". `screen.h` (new): on the R36S the top screen is
   and ShiftDownRPM to 0.0f in drivetrain.c.
 - **R36S / PortMaster build:** Rebuilt nfshp2.armhf, packaged via package.sh, and
   verified with clean LF line endings.
+
+
+## Session 160 (2026-11-21) -- Smoke thinning, mirror sky/fog, audio fallbacks, face button swap
+
+- **Smoke & particle thinning (acidsys.c):** Dense smoke and dust clouds caused severe
+  GPU fillrate drops on the Mali-G31. Added dynamic sprite thinning (gAcidThin, gAcidBigThin)
+  budgeting big particles while scaling opacity to maintain perceived cloud density.
+  Added Graphics and Smoke options rows to the in-game Display Options menu (displayoptions.c).
+- **Rearview mirror sky & fog (trackview.c):** Fixed black mirror sky caused by far plane
+  clipping (RVM_FAR_Z 192 units vs sky dome thousands out). Sky dome now draws using player
+  far plane (NFSHP2_MIRROR_SKY). Added mirror fog support (NFSHP2_MIRROR_FOG) and preserved
+  car angles and headlight tracking when mirror frames are skipped.
+- **Renderer shader key caching (c3d_gles.c):** Cached ProgKey state and texture stage
+  lookups, eliminating redundant key builds across opaque and geosolid draws. Added occlusion
+  query support for sun flare depth testing (r36s_sun_probe).
+- **Audio fallbacks & raw ALSA (ndsp_sdl.c, alsa_raw.c/h):** Added automatic retry and ALSA
+  device enumeration when SDL audio device open fails. Implemented raw kernel ALSA PCM fallback
+  (/dev/snd/pcmC0D0p) for firmware environments lacking working 32-bit libasound userspace plugins.
+  Fixed collision sound sample pointer retention on release (collisionsound.c).
+- **Controls & PortMaster metadata:** Added Face buttons swap setting (Standard vs Swapped
+  A/B & X/Y) in Controller Options (joyconfig.c); added one-screen controller help overlay.
+  Added cover.jpg, default nfshp2.cfg, and updated PortMaster metadata and packaging.

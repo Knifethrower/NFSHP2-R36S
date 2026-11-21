@@ -20,8 +20,6 @@
     "rtr": false,
     "exp": false,
     "runtime": [],
-    "store": [],
-    "availability": "paid",
     "reqs": [],
     "arch": [
       "armhf"

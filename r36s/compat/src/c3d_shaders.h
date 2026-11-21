@@ -214,4 +214,21 @@ static const char kFsPresent[] =
     "    gl_FragColor = vec4(texture2D(uTex, vUv).rgb * uShade, 1.0);\n"
     "}\n";
 
+// The sun's probe (r36s_sun_probe): a rectangle at the far plane, which
+// draws nothing, for an occlusion query to count against the depth buffer.
+// The game's depth is the PICA's, 0 at the far plane and what the clear
+// leaves, so the far plane's is the lowest window depth, NDC -1.
+static const char kVsProbe[] =
+    "attribute vec2 v0;\n"
+    "uniform vec4 uRect;\n"
+    "void main() {\n"
+    "    gl_Position = vec4(uRect.xy + v0 * uRect.zw, -1.0, 1.0);\n"
+    "}\n";
+
+static const char kFsProbe[] =
+    "precision mediump float;\n"
+    "void main() {\n"
+    "    gl_FragColor = vec4(0.0);\n"
+    "}\n";
+
 #endif
