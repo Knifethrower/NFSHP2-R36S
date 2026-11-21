@@ -73,3 +73,7 @@ int32_t joyconfig_help_layout(void);
 // otherwise.
 const char* joyconfig_bottom_body(void);
 const char* joyconfig_bottom_hint(void);
+
+// One screen: whether the page's panel should be over it -- the help key
+// summoned it, or the page waits for an action's new key, which it names.
+int joyconfig_panel_wanted(void);

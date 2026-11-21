@@ -25,6 +25,16 @@ void r36s_toast(const char* text) { snprintf(s_toast, sizeof s_toast, "%s", text
 static int s_quality;
 void r36s_quality_next(void) { s_quality++; }
 void r36s_video_resized(void) {}
+// r36s_platform.c's, which the test doesn't link: "sdmc:/" is NFSHP2_ROOT.
+const char* r36s_path(const char* in, char* out, size_t n)
+{
+    const char* root = getenv("NFSHP2_ROOT");
+    if (strncmp(in, "sdmc:/", 6) == 0) snprintf(out, n, "%s/%s", root ? root : ".", in + 6);
+    else snprintf(out, n, "%s", in);
+    return out;
+}
+void rgl_draw_now(void) {}
+void r36s_shot_next(void) {}
 
 static int s_fail;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); s_fail++; } } while (0)
@@ -123,6 +133,54 @@ int main(int argc, char** argv)
     frame();   // opens the pad
     s_joy = SDL_JoystickFromInstanceID(SDL_JoystickGetDeviceInstanceID(idx));
     if (s_joy == NULL) { printf("pad not opened\n"); return 2; }
+
+    // HID_TEST_FACE_MENU: Options' Controller row, Face buttons. Swapped, each
+    // face button does its pair's job; standard again, its own; the choice is
+    // read back from the save folder (NFSHP2_ROOT) by a later start.
+    if (getenv("HID_TEST_FACE_MENU") != NULL) {
+        static const struct { SDL_GameControllerButton b; u32 standard, swapped; } face[] = {
+            { SDL_CONTROLLER_BUTTON_A, KEY_A, KEY_Y }, { SDL_CONTROLLER_BUTTON_B, KEY_Y, KEY_A },
+            { SDL_CONTROLLER_BUTTON_X, KEY_X, KEY_B }, { SDL_CONTROLLER_BUTTON_Y, KEY_B, KEY_X },
+        };
+        const u32 faces = KEY_A | KEY_B | KEY_X | KEY_Y;
+        void r36s_face_swap_set(int on);
+        int r36s_face_swap(void);
+        for (int pass = 0; pass < 2; pass++) {
+            r36s_face_swap_set(pass == 0);
+            CHECK(r36s_face_swap() == (pass == 0));
+            for (size_t i = 0; i < sizeof face / sizeof face[0]; i++) {
+                press(face[i].b, 1);
+                frame();
+                CHECK((hidKeysHeld() & faces) == (pass == 0 ? face[i].swapped : face[i].standard));
+                press(face[i].b, 0);
+                frame();
+            }
+        }
+        r36s_face_swap_set(1);   // left on, for the next start to read
+        printf(s_fail ? "hid_swap_test (face menu): %d failed\n"
+                      : "hid_swap_test (face menu): all passed\n", s_fail);
+        return s_fail != 0;
+    }
+
+    // NFSHP2_SWAP_AB=1 and NFSHP2_SWAP_XY=1: each face button does its
+    // pair's job.
+    if (getenv("NFSHP2_SWAP_AB") != NULL) {
+        static const struct { SDL_GameControllerButton b; u32 key; } swapped[] = {
+            { SDL_CONTROLLER_BUTTON_A, KEY_Y }, { SDL_CONTROLLER_BUTTON_B, KEY_A },
+            { SDL_CONTROLLER_BUTTON_X, KEY_B }, { SDL_CONTROLLER_BUTTON_Y, KEY_X },
+        };
+        const u32 faces = KEY_A | KEY_B | KEY_X | KEY_Y;
+        for (size_t i = 0; i < sizeof swapped / sizeof swapped[0]; i++) {
+            press(swapped[i].b, 1);
+            frame();
+            CHECK((hidKeysHeld() & faces) == swapped[i].key);
+            press(swapped[i].b, 0);
+            frame();
+        }
+        printf(s_fail ? "hid_swap_test (face swap): %d failed\n"
+                      : "hid_swap_test (face swap): all passed\n", s_fail);
+        return s_fail != 0;
+    }
 
     check_ps2_buttons();
 
@@ -310,28 +368,26 @@ int main(int argc, char** argv)
     press(SDL_CONTROLLER_BUTTON_LEFTSHOULDER, 0);
     frame();
 
-    // The quality preset: Select + R2, with that R2 kept from the game.
+    // The speed preset is Options' menu now: Select + R2 changes nothing, and
+    // R2 is the game's (the manual gearbox's) with Select held or not.
     axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 32767);
     frame();
     CHECK(s_quality == 0);
-    CHECK(hidKeysHeld() & KEY_ZR);        // R2 alone is the game's
+    CHECK(hidKeysHeld() & KEY_ZR);
     axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, -32768);
     frame();
     press(SDL_CONTROLLER_BUTTON_BACK, 1);
     frame();
     axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 32767);
     frame();
-    CHECK(s_quality == 1);
-    CHECK(!(hidKeysHeld() & KEY_ZR));
+    CHECK(s_quality == 0);
+    CHECK(hidKeysHeld() & KEY_ZR);
     press(SDL_CONTROLLER_BUTTON_BACK, 0);
     frame();
-    CHECK(!(hidKeysHeld() & KEY_ZR));     // still the combo's
-    CHECK(s_quality == 1);
+    CHECK(hidKeysHeld() & KEY_ZR);
+    CHECK(s_quality == 0);
     axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, -32768);
     frame();
-    axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 32767);
-    frame();
-    CHECK(hidKeysHeld() & KEY_ZR);
 
     printf(s_fail ? "hid_swap_test: %d failed\n" : "hid_swap_test: all passed\n", s_fail);
     SDL_Quit();

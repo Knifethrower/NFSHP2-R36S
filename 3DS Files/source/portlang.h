@@ -50,6 +50,17 @@ enum {
     PORTLANG_CONTROLS_PRESS,                    // and its wait, $NAME's key
     PORTLANG_SAVE_CHANGES,                      // a screen's prompt on the
     PORTLANG_SAVE_CHANGES_RACE,                 // way out, and the debug race's
+    PORTLANG_GRAPHICS_FULL,                     // Display Options' Graphics
+    PORTLANG_GRAPHICS_FAST,                     // row (R36S), one text for
+    PORTLANG_GRAPHICS_FASTEST,                  // each preset, and its blurb
+    PORTLANG_GRAPHICS_BLURB,
+    PORTLANG_SMOKE_FULL,                        // Display Options' Smoke row
+    PORTLANG_SMOKE_LESS,                        // (R36S): three values, and
+    PORTLANG_SMOKE_LEAST,                       // its blurb
+    PORTLANG_SMOKE_BLURB,
+    PORTLANG_FACE_STANDARD,                     // Controller's Face buttons row
+    PORTLANG_FACE_SWAPPED,                      // (R36S): its two values, and
+    PORTLANG_FACE_BLURB,                        // its blurb
     PORTLANG_END
 };
 

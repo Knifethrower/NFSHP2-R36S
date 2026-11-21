@@ -15,6 +15,9 @@
 #include "helpglyph.h"
 #include "joyhid.h"
 #include "portlang.h"
+#ifdef NFSHP2_R36S
+#include "r36s_platform.h"
+#endif
 
 #define GROUP_SCREEN 0x457755c9u
 
@@ -89,13 +92,42 @@ void joyconfig_init(const JoyConfigHooks* hooks)
 
 static BScreenInstance sPre;
 
+#ifdef NFSHP2_R36S
+// The R36S's: the second row, retail's Calibration, is Face buttons:
+// Standard, or Swap A/B & X/Y (r36s_face_swap), for a pad whose buttons come
+// out crossed. A, Left or Right switches it at once, and it saves itself.
+#define FACE_ROW 2
+
+static void redrawFace(uint32_t screen)
+{
+    flailer_set_language_id(screen, BSCR_ITEM_MENUITEM(FACE_ROW),
+                            r36s_face_swap() ? PORTLANG_FACE_SWAPPED
+                                             : PORTLANG_FACE_STANDARD);
+}
+
+static void toggleFace(uint32_t screen)
+{
+    r36s_face_swap_set(!r36s_face_swap());
+    redrawFace(screen);
+    say("controller: face buttons %d", r36s_face_swap());
+}
+#endif
+
 static void preConstruct(BGameFlow* gf, uint32_t screen)
 {
     struct FlailerObjectChunk* o = NULL;
     int                        n;
 
     bscr_optbase_construct(&sPre, screen);
+#ifdef NFSHP2_R36S
+    if (gf->hooks.grayMenuItem)
+        gf->hooks.grayMenuItem(gf->hooks.user, screen,
+                               BSCR_ITEM_MENUITEM(FACE_ROW), BSCR_GRAY_ENABLE);
+    redrawFace(screen);
+    for (n = FACE_ROW + 1; n <= 6; n++) {
+#else
     for (n = 2; n <= 6; n++) {
+#endif
         if (gf->hooks.grayMenuItem)
             gf->hooks.grayMenuItem(gf->hooks.user, screen,
                                    BSCR_ITEM_MENUITEM(n), BSCR_GRAY_HIDE);
@@ -132,6 +164,13 @@ void joypreconfig_callback(BGameFlow* gf, BScreenMessage msg,
     item = data ? data->itemHash : 0;
     switch (msg) {
     case BMSG_MENUITEM_HIGHLIGHT:
+#ifdef NFSHP2_R36S
+        if (item == BSCR_ITEM_MENUITEM(FACE_ROW)) {
+            banim_blurb_new_text_id(bscr_anim(), &sPre.blurbAnim,
+                                    PORTLANG_FACE_BLURB);
+            return;
+        }
+#endif
         banim_blurb_new_text_id(bscr_anim(), &sPre.blurbAnim,
                                 item == BSCR_ITEM_MENUITEM(1) ? PRE_BLURB : 0);
         return;
@@ -139,15 +178,39 @@ void joypreconfig_callback(BGameFlow* gf, BScreenMessage msg,
         if (item == BSCR_ITEM_MENUITEM(1)) {
             say("controller: to %s", CONFIG_NAME);
             bscr_optbase_exit(&sPre, CONFIG_NAME);
+#ifdef NFSHP2_R36S
+        } else if (item == BSCR_ITEM_MENUITEM(FACE_ROW)) {
+            toggleFace(sPre.screen);
+            if (data) data->noise = BSND_MENU_RIGHT;
+#endif
         } else if (data) {
             data->noise = BSND_NONE;
         }
         return;
+#ifdef NFSHP2_R36S
+    case BMSG_MENUITEM_PAD_LEFT:
+    case BMSG_MENUITEM_PAD_RIGHT:
+        if (item == BSCR_ITEM_MENUITEM(FACE_ROW)) {
+            toggleFace(sPre.screen);
+            if (data)
+                data->noise = msg == BMSG_MENUITEM_PAD_LEFT ? BSND_MENU_LEFT
+                                                            : BSND_MENU_RIGHT;
+        }
+        return;
+    case BMSG_MENUITEM_PAD_UP:
+        // Two rows: the list stops at its first.
+        if (item == BSCR_ITEM_MENUITEM(1) && data) data->param = 1;
+        return;
+    case BMSG_MENUITEM_PAD_DOWN:
+        if (item == BSCR_ITEM_MENUITEM(FACE_ROW) && data) data->param = 1;
+        return;
+#else
     case BMSG_MENUITEM_PAD_UP:
     case BMSG_MENUITEM_PAD_DOWN:
         // One row: nothing to move to, and no noise.
         if (data) data->param = 1;
         return;
+#endif
     default:
         return;
     }
@@ -276,6 +339,7 @@ typedef struct {
     int             cursor;     // a kSlots index, or ROW_TABLE
     int             waiting;    // for the cursor's new key
     int             asking;     // the save prompt is up
+    int             help;       // one screen: the panel, summoned by Help
     float           blink;
     JoyHidBindings  entry;      // as the page found them
     BGameFlow*      gf;
@@ -735,6 +799,26 @@ uint32_t joyconfig_input(uint32_t down)
             }
         return ~0u;
     }
+#ifdef NFSHP2_R36S
+    // One screen: the page's panel (joyconfig_bottom_body) would cover its
+    // lower rows, so it comes as retail's HELP panel does on the other
+    // screens, which this one has no lines for: the help key (Circle,
+    // JOYHID_Y) summons it and sends it away, as do Back and START, and
+    // while it is up the page hears nothing else.
+    if (c->help) {
+        if (down & (JOYHID_Y | JOYHID_B | JOYHID_START)) {
+            c->help = 0;
+            redraw(c);
+        }
+        return ~0u;
+    }
+    if (down & JOYHID_Y) {
+        c->help = 1;
+        noise(BSND_MENU_SELECT);
+        redraw(c);
+        return JOYHID_Y;
+    }
+#endif
     if (down & JOYHID_X) {
         JoyHidBindings d;
 
@@ -747,6 +831,11 @@ uint32_t joyconfig_input(uint32_t down)
         return JOYHID_X;
     }
     return 0;
+}
+
+int joyconfig_panel_wanted(void)
+{
+    return pageUp() && (sConfig.waiting || sConfig.help);
 }
 
 int32_t joyconfig_help_layout(void)

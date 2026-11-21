@@ -10,9 +10,13 @@
 
 #include <SDL.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <3ds.h>
+
+#include "alsa_raw.h"
 
 #define NDSP_NUM_CHANNELS 24
 #define OUT_RATE 48000
@@ -39,9 +43,20 @@ static SDL_AudioDeviceID s_dev;
 static float          s_master = 1.0f;
 static ndspOutputMode s_mode = NDSP_OUTPUT_STEREO;
 static bool           s_up;
+static bool           s_raw;            // playing through alsa_raw.c, not SDL
+static double         s_outRate = OUT_RATE;
 
-static void lock(void) { if (s_dev) SDL_LockAudioDevice(s_dev); }
-static void unlock(void) { if (s_dev) SDL_UnlockAudioDevice(s_dev); }
+static void lock(void)
+{
+    if (s_dev) SDL_LockAudioDevice(s_dev);
+    else if (s_raw) alsa_raw_lock();
+}
+
+static void unlock(void)
+{
+    if (s_dev) SDL_UnlockAudioDevice(s_dev);
+    else if (s_raw) alsa_raw_unlock();
+}
 
 static int clamp16(int v)
 {
@@ -123,7 +138,7 @@ static void finish_head(Channel* c)
 
 static void mix_channel(Channel* c, float* out, int frames)
 {
-    double step = c->rate / OUT_RATE;
+    double step = c->rate / s_outRate;
     float gl = c->mix[0] + c->mix[2], gr = c->mix[1] + c->mix[3];
     bool stereo = channels_of(c->format) == 2;
 
@@ -201,14 +216,16 @@ static void reset_channel(Channel* c)
     c->mix[0] = c->mix[1] = 1.0f;
 }
 
-Result ndspInit(void)
+// One try: SDL's audio up (with the driver SDL_AUDIODRIVER names, or SDL's
+// own pick) and its default device open. The reason for a failure is logged,
+// since a silent game otherwise says nothing about why.
+static bool try_open(const char* what)
 {
     SDL_AudioSpec want, have;
-    if (s_up) return 0;
-    for (int i = 0; i < NDSP_NUM_CHANNELS; i++)
-        reset_channel(&s_ch[i]);
-    if (SDL_WasInit(SDL_INIT_AUDIO) == 0 && SDL_InitSubSystem(SDL_INIT_AUDIO) != 0)
-        return R36S_RESULT_UNSUPPORTED;
+    if (SDL_WasInit(SDL_INIT_AUDIO) == 0 && SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
+        printf("Sound: %s: no audio driver (%s)\n", what, SDL_GetError());
+        return false;
+    }
     memset(&want, 0, sizeof want);
     want.freq = OUT_RATE;
     want.format = AUDIO_S16SYS;
@@ -216,8 +233,93 @@ Result ndspInit(void)
     want.samples = 1024;
     want.callback = callback;
     s_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
-    if (s_dev == 0) return R36S_RESULT_UNSUPPORTED;
-    SDL_PauseAudioDevice(s_dev, 0);
+    if (s_dev == 0) {
+        const char* drv = SDL_GetCurrentAudioDriver();
+        printf("Sound: %s: %s can't open a device (%s)\n", what,
+               drv != NULL ? drv : "no driver", SDL_GetError());
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        return false;
+    }
+    printf("Sound: %s audio, %d Hz, %d channels, %d-sample buffer%s%s\n",
+           SDL_GetCurrentAudioDriver(), have.freq, have.channels, have.samples,
+           getenv("AUDIODEV") != NULL ? ", device " : "",
+           getenv("AUDIODEV") != NULL ? getenv("AUDIODEV") : "");
+    return true;
+}
+
+// When the default fails: the device may still be held for a moment by what
+// ran before (PortMaster's installer, the frontend's music), so try again a
+// few times; then every other driver SDL has, and on ALSA the sound card
+// itself in case the system's "default" names a plugin this 32-bit build
+// can't load. NFSHP2_AUDIO_FALLBACK=0 keeps only the first try. A driver or
+// device the player names with SDL_AUDIODRIVER or AUDIODEV is left alone.
+static bool open_with_fallbacks(void)
+{
+    static const char* const kAlsaDevices[] = { "sysdefault", "plughw:0,0", "hw:0,0" };
+    const char* off = getenv("NFSHP2_AUDIO_FALLBACK");
+    bool userDriver = getenv("SDL_AUDIODRIVER") != NULL;
+    bool userDevice = getenv("AUDIODEV") != NULL;
+    char what[48];
+
+    if (try_open("default")) return true;
+    if (off != NULL && off[0] == '0') return false;
+    for (int i = 2; i <= 4; i++) {
+        SDL_Delay(250);
+        snprintf(what, sizeof what, "default, try %d", i);
+        if (try_open(what)) return true;
+    }
+    for (int d = 0; !userDriver && d < SDL_GetNumAudioDrivers(); d++) {
+        const char* name = SDL_GetAudioDriver(d);
+        if (name == NULL || strcmp(name, "dummy") == 0 || strcmp(name, "disk") == 0)
+            continue;
+        setenv("SDL_AUDIODRIVER", name, 1);
+        if (try_open(name)) return true;
+        if (strcmp(name, "alsa") != 0 || userDevice) continue;
+        for (size_t k = 0; k < sizeof kAlsaDevices / sizeof kAlsaDevices[0]; k++) {
+            setenv("AUDIODEV", kAlsaDevices[k], 1);
+            snprintf(what, sizeof what, "alsa %s", kAlsaDevices[k]);
+            if (try_open(what)) return true;
+        }
+        unsetenv("AUDIODEV");
+    }
+    if (!userDriver) unsetenv("SDL_AUDIODRIVER");
+    return false;
+}
+
+static void raw_fill(void* user, uint8_t* stream, int len)
+{
+    callback(user, stream, len);
+}
+
+// The last resort, and NFSHP2_AUDIO=raw's only way: the sound card through
+// the kernel directly (alsa_raw.h), for a system whose 32-bit libasound
+// opens nothing.
+static bool open_raw(void)
+{
+    int rate = 0, period = 0;
+    char name[48];
+    if (alsa_raw_open(OUT_RATE, raw_fill, NULL, &rate, &period, name, sizeof name) != 0)
+        return false;
+    s_outRate = rate;
+    s_raw = true;
+    printf("Sound: raw ALSA on %s, %d Hz, 2 channels, %d-frame periods\n", name, rate, period);
+    return true;
+}
+
+Result ndspInit(void)
+{
+    const char* mode = getenv("NFSHP2_AUDIO");
+    const char* off = getenv("NFSHP2_AUDIO_FALLBACK");
+    if (s_up) return 0;
+    for (int i = 0; i < NDSP_NUM_CHANNELS; i++)
+        reset_channel(&s_ch[i]);
+    if (mode != NULL && strcmp(mode, "raw") == 0) {
+        if (!open_raw()) return R36S_RESULT_UNSUPPORTED;
+    } else if (open_with_fallbacks()) {
+        SDL_PauseAudioDevice(s_dev, 0);
+    } else if ((off != NULL && off[0] == '0') || !open_raw()) {
+        return R36S_RESULT_UNSUPPORTED;
+    }
     s_up = true;
     return 0;
 }
@@ -225,8 +327,13 @@ Result ndspInit(void)
 void ndspExit(void)
 {
     if (!s_up) return;
-    SDL_CloseAudioDevice(s_dev);
-    s_dev = 0;
+    if (s_raw) {
+        alsa_raw_close();
+        s_raw = false;
+    } else {
+        SDL_CloseAudioDevice(s_dev);
+        s_dev = 0;
+    }
     s_up = false;
 }
 

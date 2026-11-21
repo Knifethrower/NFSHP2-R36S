@@ -53,6 +53,19 @@ void rgl_InvalidateDepth(GLenum target, GLenum depth, GLenum stencil);
 void rgl_TexWhole2D(GLenum target, GLint level, GLsizei w, GLsizei h, GLenum format, GLenum type,
                     const void* pixels);
 
+// Occlusion queries, resolved at run time (false without them): GLES 3's
+// (`core`), else GLES 2's GL_EXT_occlusion_query_boolean, which the caller
+// has checked for. For the sun's probe (r36s_sun_probe, c3d_gles.c):
+// RGL_PROBES queries, each
+// wrapping the draws between rgl_ProbeBegin(i) and rgl_ProbeEnd. The answer
+// comes a frame or so later, and rgl_ProbeMask has one bit per query, set
+// while a sample of it passed (all set until the first answers).
+#define RGL_PROBES 16
+bool rgl_occlusion(bool core);
+void rgl_ProbeBegin(unsigned i);
+void rgl_ProbeEnd(void);
+unsigned rgl_ProbeMask(void);
+
 #define RGL_FUNCS(X) \
     X(void, ActiveTexture, (GLenum a), (a)) \
     X(void, AttachShader, (GLuint a, GLuint b), (a, b)) \

@@ -1357,6 +1357,39 @@ static void draw_sprites(TrackView* v, const TrackDeferred* d)
 // WorldEffects', for the view s_draw draws, onto its first target.
 static void render_effects(eView* view)
 {
+#ifdef NFSHP2_R36S
+    // NFSHP2_PARTICLES=N: one in N of the big smoke and dust sprites is
+    // drawn, with the alpha N would have given (acidsys.h). Unset, the
+    // smoke row says: 1 (all) at Full, 2 at Less, 3 at Least.
+    if (view->ID == EVIEW_ID_PLAYER1) {
+        const char* e = getenv("NFSHP2_PARTICLES");
+        int         smoke = r36s_smoke();
+        int         n = e != NULL && e[0] != '\0' ? atoi(e)
+                      : smoke == 0 ? 1 : smoke == 1 ? 2 : 3;
+
+        // NFSHP2_SMOKE_BUDGET=N (acidsys.h), 0 for none: with more than N
+        // sprites a fifth of the screen or bigger in the last frame, the
+        // smallest power of two that brings them to N or under. Unset, Full
+        // draws them all and the other two thin a dense cloud to 16.
+        const char* eb     = getenv("NFSHP2_SMOKE_BUDGET");
+        int         budget = eb != NULL && eb[0] != '\0' ? atoi(eb)
+                             : smoke == 0 ? 0 : 16;
+        int         big    = 1;
+
+        while (budget > 0 && big < 16 && gAcidBigSeen > (uint32_t)(budget * big)) {
+            big *= 2;
+        }
+        gAcidBigThin = big;
+        gAcidBigSeen = 0;
+        gAcidThin    = n < 1 ? 1 : n > 4 ? 4 : n;
+        gAcidSprites    = 0;
+        gAcidDrawn      = 0;
+        gAcidAreaAllK   = 0.0f;
+        gAcidAreaDrawnK = 0.0f;
+        memset(gAcidBucketK, 0, sizeof gAcidBucketK);
+        memset(gAcidBucketN, 0, sizeof gAcidBucketN);
+    }
+#endif
     s_quadTarget         = view->pRenderTarget0;
     gEAttachDirectDataFn = attach_direct_data;
     acid_system_render_effects(&FrameEffects, view);
@@ -3216,6 +3249,17 @@ static void transfer_zbuffer_rect(uint8_t* dst, int x, int y, int w, int h)
         || w * h > SUN_ZBUFFER_SIZE * SUN_ZBUFFER_SIZE) {
         return;
     }
+#ifdef NFSHP2_R36S
+    // GLES can't read the depth back: the GL layer counts the sky with
+    // occlusion queries instead (screen.h), and fills dst from the last
+    // frame's.
+    r36s_sun_probe((uint32_t*)(void*)dst, x, y, w, h, rt->ScissorW, rt->ScissorH);
+    if (s_draw) {
+        s_draw->sunRectX = x;
+        s_draw->sunRectY = y;
+    }
+    return;
+#endif
     r = &s_sunRects[s_numSunRects++];
     r->dst     = (uint32_t*)(void*)dst;
     r->x       = x;
@@ -3717,7 +3761,7 @@ bool trackview_envmap_init(void)
 //                          picture, so the cars' reflections lag
 //   NFSHP2_MIRROR_EVERY=N  the mirror redrawn every Nth frame (1 to 4),
 //                          shown as last drawn in between
-// Without them, the preset says (r36s_quality: Select + R2).
+// Without them, the preset says (r36s_quality: Options, Display, Graphics).
 static int r36s_option(const char* name, int fallback, int lo, int hi)
 {
     const char* e = getenv(name);
@@ -3947,6 +3991,7 @@ void trackview_draw_mirror(TrackView* v)
     uint32_t       profCars[FRAMEPROF_C_COUNT];
     float          tanx, tany;
     int            drawn;
+    bool           mirrorFog = false;
 
     v->mirrorDrawn  = false;
     v->mirrorModels = 0;
@@ -3972,6 +4017,9 @@ void trackview_draw_mirror(TrackView* v)
         int             every = r36s_option("NFSHP2_MIRROR_EVERY", r36s_quality() >= 1 ? 2 : 1, 1, 4);
         if (every > 1 && s_mirrorHas && s_mirrorFrame++ % (unsigned)every != 0) {
             v->mirrorDrawn = georender_mirror_texture() != NULL;
+            // The trackers still read the mirror's angles this frame.
+            render_cars_keep_angles();
+            render_cars_angles_only(view);
             return;
         }
         s_mirrorHas = true;
@@ -3992,7 +4040,16 @@ void trackview_draw_mirror(TrackView* v)
     v->listFrame = false;
     capture_offscreen(true);
     georender_set_light(0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f);
-    georender_set_fog(NULL, 0);
+#ifdef NFSHP2_R36S
+    // NFSHP2_MIRROR_FOG=0 draws the mirror as retail does, without the fog:
+    // the PS2 lays its fog over views 1 and 2 alone. But the player's view
+    // shows the dome through the sky's fog, so the bare dome in the mirror
+    // looks dark beside it. By default the mirror takes the player's view's
+    // fog, last frame's (its view draws after the mirror), by the mirror's
+    // own depth.
+    mirrorFog = s_fogOn && r36s_option("NFSHP2_MIRROR_FOG", 1, 0, 1) != 0;
+#endif
+    georender_set_fog(mirrorFog ? &s_skyFog : NULL, s_fogColour);
 
     tanx = 1.25f * (float)rt->ScissorW * 0.5f / (view->H * rt->AspectRatioX);
     tany = (float)rt->ScissorH * 0.5f / (view->H * rt->AspectRatioY);
@@ -4005,9 +4062,36 @@ void trackview_draw_mirror(TrackView* v)
 
     georender_set_zwrite(false);
     hangwatch_mark("the mirror's sky");
+#ifdef NFSHP2_R36S
+    // The mirror's far plane is RVM_FAR_Z, 192 units, and the sky dome sits
+    // thousands out, so the dome was clipped and the mirror showed black
+    // where the sky is. The sky alone is drawn with the player's far plane
+    // (its Z writes are off, so only the clip changes), then the mirror's
+    // back. NFSHP2_MIRROR_SKY=0 keeps the clip.
+    {
+        eView* pv      = eGetView(EVIEW_ID_PLAYER1);
+        float  skyFar  = view->FarZ;
+
+        if (pv != NULL && pv->FarZ > view->FarZ
+            && r36s_option("NFSHP2_MIRROR_SKY", 1, 0, 1) != 0)
+            skyFar = pv->FarZ;
+        Mtx_Persp(&s_proj, 2.0f * atanf(tany), tanx / tany, view->NearZ,
+                  skyFar, false);
+        georender_run_begin();
+        StuffSky(view);
+        draw_deferred(v, true);
+        georender_run_end();
+        Mtx_Persp(&s_proj, 2.0f * atanf(tany), tanx / tany, view->NearZ,
+                  view->FarZ, false);
+    }
+#else
     StuffSky(view);
     draw_deferred(v, true);
+#endif
     georender_set_zwrite(true);
+    if (mirrorFog) {
+        georender_set_fog(&s_fog, s_fogColour);
+    }
     hangwatch_mark("the mirror's scenery");
     georender_run_begin();
     scenery_stuff_scenery(&v->cull, view);

@@ -10,10 +10,13 @@
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <malloc.h>
+#include <pthread.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
 #include <time.h>
@@ -21,6 +24,17 @@
 #include <unistd.h>
 
 #include "r36s_platform.h"
+
+// The effects' sprite counts (3DS Files/source/acidsys.h), logged with the
+// memory line.
+extern int      gAcidThin;
+extern uint32_t gAcidSprites;
+extern uint32_t gAcidDrawn;
+extern float    gAcidAreaAllK;
+extern float    gAcidAreaDrawnK;
+extern float    gAcidBucketK[5];
+extern uint32_t gAcidBucketN[5];
+extern int      gAcidBigThin;
 
 R36sGlCounts r36s_glcounts;
 bool r36s_present_thread;
@@ -63,22 +77,103 @@ void r36s_fps_meter_text(char* line1, size_t n1, char* line2, size_t n2)
 
 static int s_quality = -1;
 
+// FAST (1) unless NFSHP2_QUALITY or the menu's choice says otherwise: the
+// user's choice of 2026-11-19, after a dense race on Full at 19-25 fps.
+// NFSHP2_QUALITY=0 is the game as retail draws it.
+#define QUALITY_DEFAULT 1
+
+// Display Options' Graphics row keeps its choice here, one digit, beside
+// the game's own saves: NFSHP2_QUALITY, when set, still wins at start.
+#define QUALITY_SAVE_DIR  "sdmc:/NFSHP2/SAVES"
+#define QUALITY_SAVE_FILE QUALITY_SAVE_DIR "/graphics.txt"
+
+const char* r36s_path(const char* in, char* out, size_t n);   // compat's 3ds.h
+
 int r36s_quality(void)
 {
     if (s_quality < 0) {
         const char* e = getenv("NFSHP2_QUALITY");
-        s_quality = e != NULL && e[0] != '\0' ? atoi(e) : 0;
-        if (s_quality < 0 || s_quality > 2) s_quality = 0;
+        s_quality = QUALITY_DEFAULT;
+        if (e != NULL && e[0] != '\0') {
+            s_quality = atoi(e);
+            printf("perf: quality %d (NFSHP2_QUALITY)\n", s_quality);
+        } else {
+            char path[512];
+            FILE* f = fopen(r36s_path(QUALITY_SAVE_FILE, path, sizeof path), "r");
+            int q;
+            if (f != NULL) {
+                if (fscanf(f, "%d", &q) == 1) {
+                    s_quality = q;
+                    printf("perf: quality %d (saved)\n", q);
+                }
+                fclose(f);
+            }
+        }
+        if (s_quality < 0 || s_quality > 2) s_quality = QUALITY_DEFAULT;
     }
     return s_quality;
 }
 
-void r36s_quality_next(void)
+// The smoke row (Options' Display): 0 Full draws every big smoke and dust
+// puff as the PS2 does; 1 Less and 2 Least draw one in two or three of
+// them, and thin a dense cloud (NFSHP2_SMOKE_BUDGET). Kept beside the
+// graphics choice; NFSHP2_PARTICLES and NFSHP2_SMOKE_BUDGET, when set,
+// still win.
+#define SMOKE_DEFAULT 1
+#define SMOKE_SAVE_FILE QUALITY_SAVE_DIR "/smoke.txt"
+
+static int s_smoke = -1;
+
+int r36s_smoke(void)
 {
-    static const char* const kName[3] = { "QUALITY FULL", "QUALITY FAST", "QUALITY FASTEST" };
-    s_quality = (r36s_quality() + 1) % 3;
-    printf("perf: quality %d\n", s_quality);
-    r36s_toast(kName[s_quality]);
+    if (s_smoke < 0) {
+        char path[512];
+        FILE* f = fopen(r36s_path(SMOKE_SAVE_FILE, path, sizeof path), "r");
+        int v;
+
+        s_smoke = SMOKE_DEFAULT;
+        if (f != NULL) {
+            if (fscanf(f, "%d", &v) == 1 && v >= 0 && v <= 2) s_smoke = v;
+            fclose(f);
+        }
+    }
+    return s_smoke;
+}
+
+void r36s_smoke_set(int v)
+{
+    char path[512];
+    FILE* f;
+
+    if (v < 0 || v > 2) return;
+    s_smoke = v;
+    printf("perf: smoke %d\n", v);
+    mkdir(r36s_path(QUALITY_SAVE_DIR, path, sizeof path), 0755);
+    f = fopen(r36s_path(SMOKE_SAVE_FILE, path, sizeof path), "w");
+    if (f != NULL) {
+        fprintf(f, "%d\n", v);
+        fclose(f);
+    } else {
+        printf("perf: the smoke choice couldn't be saved to %s\n", path);
+    }
+}
+
+void r36s_quality_set(int q)
+{
+    char path[512];
+    FILE* f;
+
+    if (q < 0 || q > 2) return;
+    s_quality = q;
+    printf("perf: quality %d\n", q);
+    mkdir(r36s_path(QUALITY_SAVE_DIR, path, sizeof path), 0755);
+    f = fopen(r36s_path(QUALITY_SAVE_FILE, path, sizeof path), "w");
+    if (f != NULL) {
+        fprintf(f, "%d\n", q);
+        fclose(f);
+    } else {
+        printf("perf: the graphics choice couldn't be saved to %s\n", path);
+    }
 }
 
 // The share of the screen's resolution drawn: NFSHP2_RENDER_SCALE, any value
@@ -207,12 +302,15 @@ static void mem_text(char* out, size_t n)
         if (fscanf(f, "%ld", &temp) != 1) temp = 0;
         fclose(f);
     }
+    // The effects' sprites in the last frame drawn (acidsys.h), with the
+    // thinning in force: what a frame's smoke and dust costs.
     snprintf(out, n, "memory: RSS %ld MB (swapped %ld), available %ld MB, swap %ld of %ld MB free,"
              " %lu major faults; malloc %u MB, mmap %u MB; %u GL textures made; GPU %s, %ld C,"
-             " quality %d",
+             " quality %d; particles 1 in %d, big 1 in %d: %u sprites (%.0f kpx), %u drawn (%.0f kpx)",
              rss / 1024, swapped / 1024, avail / 1024, swapFree / 1024, swapTotal / 1024, majflt,
              (unsigned)(mallinfo().uordblks >> 20), (unsigned)(mallinfo().hblkhd >> 20),
-             r36s_gl_textures_made, gpu[0] ? gpu : "?", temp / 1000, r36s_quality());
+             r36s_gl_textures_made, gpu[0] ? gpu : "?", temp / 1000, r36s_quality(), gAcidThin,
+             gAcidBigThin, gAcidSprites, (double)gAcidAreaAllK, gAcidDrawn, (double)gAcidAreaDrawnK);
 }
 
 void r36s_perf_frame(double swapMs)
@@ -320,9 +418,15 @@ void r36s_perf_frame_with(double swapMs, const R36sGlCounts* counts)
             }
         }
         {
-            char mem[280];
+            char mem[400];
             mem_text(mem, sizeof mem);
             printf("%s\n", mem);
+            printf("particles by half-size (under 10, 10-40, 40-100, 100-250, 250 up, px): "
+                   "%u/%.0f %u/%.0f %u/%.0f %u/%.0f %u/%.0f sprites/kpx\n",
+                   gAcidBucketN[0], (double)gAcidBucketK[0], gAcidBucketN[1],
+                   (double)gAcidBucketK[1], gAcidBucketN[2], (double)gAcidBucketK[2],
+                   gAcidBucketN[3], (double)gAcidBucketK[3], gAcidBucketN[4],
+                   (double)gAcidBucketK[4]);
             r36s_pad_text(mem, sizeof mem);
             printf("%s\n", mem);
         }
@@ -334,8 +438,12 @@ void r36s_perf_frame_with(double swapMs, const R36sGlCounts* counts)
 
 // ------------------------------------------------------------ the sampler
 
-// A preallocated ring of (pc, tid) pairs, filled by the SIGPROF handler and
-// written at exit: 512 K samples, 8 minutes of one busy core.
+// A preallocated ring of (pc, tid) pairs, filled by the SIGPROF handler:
+// 512 K samples, the last 8 minutes of one busy core (about 3 of the game's
+// busy threads). A thread writes them out every NFSHP2_PROFILE_EVERY seconds
+// (20 unset, 0 only at exit), as well as at exit: PortMaster's Start + Select
+// kills the game with SIGKILL, which no exit handler sees, and a session's
+// profile was lost with it.
 #define PROF_MAX (512u * 1024u)
 static struct { uint32_t pc, tid; }* s_samples;
 static volatile unsigned s_nSamples;
@@ -344,8 +452,7 @@ static void prof_handler(int sig, siginfo_t* si, void* uc)
 {
     unsigned i;
     (void)sig; (void)si;
-    i = __atomic_fetch_add(&s_nSamples, 1, __ATOMIC_RELAXED);
-    if (i >= PROF_MAX) return;
+    i = __atomic_fetch_add(&s_nSamples, 1, __ATOMIC_RELAXED) % PROF_MAX;
 #if defined(__arm__)
     s_samples[i].pc = (uint32_t)((ucontext_t*)uc)->uc_mcontext.arm_pc;
 #elif defined(__aarch64__)
@@ -367,28 +474,48 @@ static void copy_file(const char* from, FILE* to)
     fclose(f);
 }
 
-static void prof_write(void)
+// Each file goes to a .tmp beside it and is renamed over the old one, so a
+// kill in the middle leaves the last whole copy.
+static FILE* prof_open(const char* name, char* tmp, size_t n)
 {
-    struct itimerval off = { { 0, 0 }, { 0, 0 } };
-    unsigned n = s_nSamples < PROF_MAX ? s_nSamples : PROF_MAX;
+    snprintf(tmp, n, "%s.tmp", name);
+    return fopen(tmp, "w");
+}
+
+static void prof_close(FILE* f, const char* tmp, const char* name)
+{
+    if (f == NULL) return;
+    if (fclose(f) == 0) rename(tmp, name);
+}
+
+static pthread_mutex_t s_profMu = PTHREAD_MUTEX_INITIALIZER;
+
+static unsigned prof_dump(void)
+{
+    unsigned total = s_nSamples;
+    unsigned n = total < PROF_MAX ? total : PROF_MAX;
+    unsigned first = total < PROF_MAX ? 0 : total % PROF_MAX;
+    char tmp[64];
     FILE* f;
     DIR* d;
     struct dirent* e;
 
-    setitimer(ITIMER_PROF, &off, NULL);
-    f = fopen("prof_samples.txt", "w");
+    pthread_mutex_lock(&s_profMu);
+    f = prof_open("prof_samples.txt", tmp, sizeof tmp);
     if (f != NULL) {
-        for (unsigned i = 0; i < n; i++)
+        // Oldest first. The handler goes on writing while this reads, so the
+        // oldest few may already be newer ones: a handful of samples.
+        for (unsigned k = 0; k < n; k++) {
+            unsigned i = (first + k) % PROF_MAX;
             fprintf(f, "%x %u\n", (unsigned)s_samples[i].pc, (unsigned)s_samples[i].tid);
-        fclose(f);
+        }
     }
-    f = fopen("prof_maps.txt", "w");
-    if (f != NULL) {
-        copy_file("/proc/self/maps", f);
-        fclose(f);
-    }
+    prof_close(f, tmp, "prof_samples.txt");
+    f = prof_open("prof_maps.txt", tmp, sizeof tmp);
+    if (f != NULL) copy_file("/proc/self/maps", f);
+    prof_close(f, tmp, "prof_maps.txt");
     // The threads' names, for the samples' tids.
-    f = fopen("prof_threads.txt", "w");
+    f = prof_open("prof_threads.txt", tmp, sizeof tmp);
     d = opendir("/proc/self/task");
     if (f != NULL && d != NULL) {
         while ((e = readdir(d)) != NULL) {
@@ -400,9 +527,37 @@ static void prof_write(void)
         }
     }
     if (d != NULL) closedir(d);
-    if (f != NULL) fclose(f);
+    prof_close(f, tmp, "prof_threads.txt");
+    pthread_mutex_unlock(&s_profMu);
+    return n;
+}
+
+static void prof_write(void)
+{
+    struct itimerval off = { { 0, 0 }, { 0, 0 } };
+    unsigned n;
+
+    setitimer(ITIMER_PROF, &off, NULL);
+    n = prof_dump();
     printf("perf: %u CPU samples written to prof_samples.txt%s\n", n,
-           s_nSamples > PROF_MAX ? " (the buffer filled)" : "");
+           s_nSamples > PROF_MAX ? " (the last ones: the ring wrapped)" : "");
+}
+
+// The writer: its own thread, at the lowest priority, so the game's don't
+// wait on the card. It is sampled too (the timer's signal goes to the
+// thread whose CPU time it is): its own tid, named "prof writer".
+static void* prof_writer(void* arg)
+{
+    unsigned every = (unsigned)(uintptr_t)arg;
+
+    pthread_setname_np(pthread_self(), "prof writer");
+    (void)nice(19);
+    for (;;) {
+        sleep(every);
+        unsigned n = prof_dump();
+        printf("perf: %u CPU samples saved so far\n", n);
+    }
+    return NULL;
 }
 
 void r36s_prof_start(void)
@@ -421,5 +576,15 @@ void r36s_prof_start(void)
     sigaction(SIGPROF, &sa, NULL);
     atexit(prof_write);
     setitimer(ITIMER_PROF, &it, NULL);
-    printf("perf: CPU sampler on, 1000 Hz of CPU time\n");
+    {
+        const char* ev = getenv("NFSHP2_PROFILE_EVERY");
+        int every = ev != NULL && ev[0] != '\0' ? atoi(ev) : 20;
+        pthread_t t;
+
+        if (every > 0
+            && pthread_create(&t, NULL, prof_writer, (void*)(uintptr_t)every) == 0)
+            pthread_detach(t);
+        printf("perf: CPU sampler on, 1000 Hz of CPU time, saved every %d s\n",
+               every > 0 ? every : 0);
+    }
 }

@@ -29,8 +29,17 @@ extern char* fake_heap_start;
 // ------------------------------------------------------- crash report
 
 // A fault prints where it happened (pc, lr, the faulting address and a
-// backtrace) to stderr, which PortMaster's launcher keeps in log.txt. The
-// addresses go through aarch64-linux-gnu-addr2line -f -e nfshp2.aarch64.
+// backtrace) to stderr, which the game keeps in nfshp2_stderr.txt, and to
+// stdout, which PortMaster's launcher keeps in log.txt, so that a log sent
+// for a crash has it. The addresses go through
+// arm-linux-gnueabihf-addr2line -f -e nfshp2.armhf (aarch64-linux-gnu- for
+// the 64-bit build).
+static void crash_write(const char* s, size_t n)
+{
+    write(2, s, n);
+    write(1, s, n);
+}
+
 static void r36s_crash(int sig, siginfo_t* si, void* uc_)
 {
     ucontext_t* uc = (ucontext_t*)uc_;
@@ -50,15 +59,16 @@ static void r36s_crash(int sig, siginfo_t* si, void* uc_)
 #endif
     int n = snprintf(buf, sizeof buf, "R36S: signal %d at pc %llx lr %llx sp %llx, address %p\n",
                      sig, pc, lr, sp, si->si_addr);
-    if (n > 0) write(2, buf, (size_t)n);
+    if (n > 0) crash_write(buf, (size_t)n);
     for (int i = 0; i < nregs; i++) {
         n = snprintf(buf, sizeof buf, "  r%-2d %016llx%s", i, r[i], (i % 4) == 3 ? "\n" : "");
-        if (n > 0) write(2, buf, (size_t)n);
+        if (n > 0) crash_write(buf, (size_t)n);
     }
-    write(2, "\nbacktrace:\n", 12);
+    crash_write("\nbacktrace:\n", 12);
     void* bt[48];
     int k = backtrace(bt, 48);
     backtrace_symbols_fd(bt, k, 2);
+    backtrace_symbols_fd(bt, k, 1);
     signal(sig, SIG_DFL);
     raise(sig);
 }
